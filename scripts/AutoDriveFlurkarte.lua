@@ -1,5 +1,5 @@
 --[[
-    FS25_AutoDriveFlurkarte – Live Data Export v4.2
+    FS25_AutoDriveFlurkarte – Live Data Export v4.3
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/AutoDriveFlurkarte/liveData.json
@@ -14,7 +14,7 @@ local JSON_ARRAY_MT = { __jsonArray = true }
 
 AutoDriveFlurkarteLive                 = {}
 AutoDriveFlurkarteLive.MOD_NAME        = MODNAME
-AutoDriveFlurkarteLive.VERSION         = "4.2.0"
+AutoDriveFlurkarteLive.VERSION         = "4.3.0"
 AutoDriveFlurkarteLive.SETTINGS_DIR    = "AutoDriveFlurkarte"
 AutoDriveFlurkarteLive.OUTPUT_FILE     = "liveData.json"
 AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000
@@ -130,40 +130,53 @@ end
 function AutoDriveFlurkarteLive:classifyFieldState(fieldState)
     if fieldState == nil or not fieldState.isValid then return "INVALID", nil end
 
-    -- Ein real bearbeiteter Boden hat Vorrang vor eventuell noch vorhandenen
-    -- Fruchtbits. Dadurch wird ein gepflügter/gegrubberter Bereich nicht mehr als
-    -- erntereif erkannt, nur weil dort noch ein alter Fruchtzustand gemeldet wird.
+    -- Frucht- und Bodenzustand sind im FS25 voneinander unabhängige Density-Map-
+    -- Informationen. Gerade bei vorbefüllten Karten kann eine sichtbare Kultur je
+    -- nach GrowthState einen Bodentyp wie CULTIVATED melden. Deshalb darf ein
+    -- "bearbeiteter" groundType eine tatsächlich vorhandene, stehende Kultur nicht
+    -- pauschal überstimmen.
+    local fruitIdx = fieldState.fruitTypeIndex
+    local unknownFruit = FruitType ~= nil and FruitType.UNKNOWN or 0
+    local fruitType = nil
+    if fruitIdx ~= nil and fruitIdx ~= unknownFruit and fruitIdx ~= 0 then
+        fruitType = g_fruitTypeManager and g_fruitTypeManager:getFruitTypeByIndex(fruitIdx) or nil
+    end
+
+    if fruitType ~= nil then
+        local growthState = fieldState.growthState or 0
+
+        if fruitType.getIsWithered ~= nil and fruitType:getIsWithered(growthState) then
+            return "WITHERED", fruitType
+        end
+
+        -- Bei bereits geschnittener Frucht hat ein anschließend bearbeiteter Boden
+        -- Vorrang: nach Grubbern/Pflügen soll der Bereich als TILLED erscheinen und
+        -- nicht dauerhaft als abgeerntete Kultur hängen bleiben.
+        if fruitType.getIsCut ~= nil and fruitType:getIsCut(growthState) then
+            if self:isWorkedGroundType(fieldState.groundType) then
+                return "TILLED", nil
+            end
+            return "HARVESTED", fruitType
+        end
+
+        local minHarvest = fruitType.minHarvestingGrowthState or -1
+        local maxHarvest = fruitType.maxHarvestingGrowthState or -1
+        if minHarvest >= 0 and maxHarvest >= 0
+            and growthState >= minHarvest and growthState <= maxHarvest then
+            return "READY", fruitType
+        end
+
+        -- Jede weitere valide, nicht geschnittene Frucht ist eine stehende Kultur.
+        -- Das gilt bewusst auch dann, wenn ihr GrowthState einen CULTIVATED-ähnlichen
+        -- groundType verwendet.
+        return "GROWING", fruitType
+    end
+
     if self:isWorkedGroundType(fieldState.groundType) then
         return "TILLED", nil
     end
 
-    local fruitIdx = fieldState.fruitTypeIndex
-    local unknownFruit = FruitType ~= nil and FruitType.UNKNOWN or 0
-    if fruitIdx == nil or fruitIdx == unknownFruit or fruitIdx == 0 then
-        return "FALLOW", nil
-    end
-
-    local fruitType = g_fruitTypeManager and g_fruitTypeManager:getFruitTypeByIndex(fruitIdx) or nil
-    if fruitType == nil then
-        return "FALLOW", nil
-    end
-
-    local growthState = fieldState.growthState or 0
-    if fruitType.getIsWithered ~= nil and fruitType:getIsWithered(growthState) then
-        return "WITHERED", fruitType
-    end
-    if fruitType.getIsCut ~= nil and fruitType:getIsCut(growthState) then
-        return "HARVESTED", fruitType
-    end
-
-    local minHarvest = fruitType.minHarvestingGrowthState or -1
-    local maxHarvest = fruitType.maxHarvestingGrowthState or -1
-    if minHarvest >= 0 and maxHarvest >= 0
-        and growthState >= minHarvest and growthState <= maxHarvest then
-        return "READY", fruitType
-    end
-
-    return "GROWING", fruitType
+    return "FALLOW", nil
 end
 
 function AutoDriveFlurkarteLive:sampleField(field)
@@ -622,7 +635,15 @@ function AutoDriveFlurkarteLive:collectVehicles()
     local diagnostics = { seen = 0, exported = 0, failed = 0, skipped = 0 }
     self.vehicleDiagnostics = diagnostics
 
-    if g_currentMission == nil or g_currentMission.vehicles == nil then return result end
+    -- FS25 verwaltet die registrierten Savegame-Fahrzeuge im VehicleSystem.
+    -- g_currentMission.vehicles ist in aktuellen Builds nicht die Fahrzeugliste und
+    -- kann nil sein, wodurch der bisherige Export sofort mit seen=0 zurückkehrte.
+    local vehicleSystem = g_currentMission and g_currentMission.vehicleSystem or nil
+    local vehicles = vehicleSystem and vehicleSystem.vehicles or nil
+    if vehicles == nil then
+        self:logError("collectVehicles", "g_currentMission.vehicleSystem.vehicles nicht verfügbar")
+        return result
+    end
 
     local myFarmId = self:getPlayerFarmId()
     if myFarmId <= 0 then
@@ -630,7 +651,7 @@ function AutoDriveFlurkarteLive:collectVehicles()
         return result
     end
 
-    for _, vehicle in ipairs(g_currentMission.vehicles) do
+    for _, vehicle in pairs(vehicles) do
         diagnostics.seen = diagnostics.seen + 1
         local ok, vehicleData = self:protected(
             "processVehicle " .. tostring(vehicle.typeName or "?"),
@@ -1127,7 +1148,13 @@ function AutoDriveFlurkarteLive:collectMarket()
     local economyManager = g_currentMission and g_currentMission.economyManager
 
     for _, fillType in pairs(g_fillTypeManager.fillTypes or {}) do
-        if fillType ~= nil and fillType.pricePerLiter ~= nil and fillType.pricePerLiter > 0 then
+        -- Nur FillTypes exportieren, die GIANTS selbst für die Preisübersicht
+        -- freigibt. Tier-Rassen besitzen ebenfalls pricePerLiter-Werte, sind aber
+        -- keine Marktprodukte und haben showOnPriceTable=false.
+        if fillType ~= nil
+            and fillType.showOnPriceTable == true
+            and fillType.pricePerLiter ~= nil
+            and fillType.pricePerLiter > 0 then
             local basePrice = fillType.pricePerLiter * 1000
             local currentPrice = basePrice
 
