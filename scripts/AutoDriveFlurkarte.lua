@@ -1,5 +1,5 @@
 --[[
-    FS25_AutoDriveFlurkarte – Live Data Export v4.3
+    FS25_AutoDriveFlurkarte – Live Data Export v4.3.1
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/AutoDriveFlurkarte/liveData.json
@@ -14,7 +14,7 @@ local JSON_ARRAY_MT = { __jsonArray = true }
 
 AutoDriveFlurkarteLive                 = {}
 AutoDriveFlurkarteLive.MOD_NAME        = MODNAME
-AutoDriveFlurkarteLive.VERSION         = "4.3.0"
+AutoDriveFlurkarteLive.VERSION         = "4.3.1"
 AutoDriveFlurkarteLive.SETTINGS_DIR    = "AutoDriveFlurkarte"
 AutoDriveFlurkarteLive.OUTPUT_FILE     = "liveData.json"
 AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000
@@ -742,10 +742,17 @@ function AutoDriveFlurkarteLive:getFillTypeData(fillTypeIndex)
     local fillType = g_fillTypeManager and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
     if fillType == nil then return nil end
     local name = string.upper(fillType.name or "UNKNOWN")
+    local title = fillType.title or fillType.name or name
+
+    -- GIANTS lokalisiert DEF auf Deutsch technisch als "Synthetische Harnstofflösung".
+    -- Für die Fuhrpark-Anzeige verwenden wir bewusst die im Fahrzeugkontext übliche
+    -- und deutlich kürzere Bezeichnung "AdBlue".
+    if name == "DEF" then title = "AdBlue" end
+
     return {
         index = fillTypeIndex,
         name = name,
-        title = fillType.title or fillType.name or name,
+        title = title,
     }
 end
 
