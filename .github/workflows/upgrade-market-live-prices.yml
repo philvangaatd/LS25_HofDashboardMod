@@ -1,0 +1,46 @@
+name: Upgrade live station market
+
+on:
+  push:
+    paths:
+      - '.github/workflows/upgrade-market-live-prices.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Apply live station market upgrade
+        run: python3 .github/scripts/upgrade_market_live_prices.py
+
+      - name: Validate Lua syntax
+        run: luac -p scripts/AutoDriveFlurkarte.lua
+
+      - name: Verify market contract
+        run: |
+          grep -q 'VERSION         = "4.4.0"' scripts/AutoDriveFlurkarte.lua
+          grep -q 'getEffectiveFillTypePrice(fillType.index)' scripts/AutoDriveFlurkarte.lua
+          grep -q 'pricePer1000L' scripts/AutoDriveFlurkarte.lua
+          grep -q 'bestStation' scripts/AutoDriveFlurkarte.lua
+          grep -q 'stationCount' scripts/AutoDriveFlurkarte.lua
+          grep -q '<version>4.4.0.0</version>' modDesc.xml
+
+      - name: Validate diff
+        run: git diff --check
+
+      - name: Commit application changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/AutoDriveFlurkarte.lua modDesc.xml
+          git diff --cached --quiet || git commit -m "feat: export live prices per selling station"
+          git push
