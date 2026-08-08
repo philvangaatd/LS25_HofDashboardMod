@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>AutoDrive Flurkarte</author>
-    <version>4.5.0.0</version>
+    <version>4.5.1.0</version>
     <title>
         <en>AutoDrive Flurkarte - Live Export</en>
         <de>AutoDrive Flurkarte - Live Export</de>
@@ -15,5 +15,6 @@ Schreibt nach: modSettings/AutoDriveFlurkarte/liveData.json</de>
     <multiplayer supported="false"/>
     <extraSourceFiles>
         <sourceFile filename="scripts/AutoDriveFlurkarte.lua"/>
+        <sourceFile filename="scripts/PlaceableRegistryAdapter.lua"/>
     </extraSourceFiles>
 </modDesc>
