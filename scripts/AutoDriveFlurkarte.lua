@@ -1,28 +1,77 @@
 --[[
-    FS25_AutoDriveFlurkarte – Vollständiger Live Data Export v3.0
-    ============================================================
+    FS25_AutoDriveFlurkarte – Live Data Export v4.0
+    =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/AutoDriveFlurkarte/liveData.json
 
-    Enthält: Hof-Info, Felder, Fahrzeuge, Tiere, Produktion, Verträge, Marktpreise
-    Alle Daten direkt aus der FS25-Lua-API – keine XML-Dateien nötig.
-    API-Referenz: gdn.giants-software.com/documentation_scripting_fs25.php
+    Datenfluss: FS25 Lua API -> liveData.json -> PHP API -> Frontend.
+    Der Lua-Mod ist die autoritative Quelle für alle Live-Zustände.
+    API-Referenz: https://gdn.giants-software.com/documentation_scripting_fs25.php
 ]]
 
 local MODNAME = g_currentModName or "FS25_AutoDriveFlurkarte"
+local JSON_ARRAY_MT = { __jsonArray = true }
 
-AutoDriveFlurkarteLive              = {}
-AutoDriveFlurkarteLive.MOD_NAME     = MODNAME
-AutoDriveFlurkarteLive.VERSION      = "3.0.0"
-AutoDriveFlurkarteLive.SETTINGS_DIR = "AutoDriveFlurkarte"
-AutoDriveFlurkarteLive.OUTPUT_FILE  = "liveData.json"
-AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000   -- 15 Sekunden
-AutoDriveFlurkarteLive.timer        = 0
-AutoDriveFlurkarteLive.isReady      = false
-
--- Lazy-init nach loadMap
-AutoDriveFlurkarteLive.FUEL_TYPES       = nil
+AutoDriveFlurkarteLive                 = {}
+AutoDriveFlurkarteLive.MOD_NAME        = MODNAME
+AutoDriveFlurkarteLive.VERSION         = "4.0.0"
+AutoDriveFlurkarteLive.SETTINGS_DIR    = "AutoDriveFlurkarte"
+AutoDriveFlurkarteLive.OUTPUT_FILE     = "liveData.json"
+AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000
+AutoDriveFlurkarteLive.timer           = 0
+AutoDriveFlurkarteLive.isReady         = false
+AutoDriveFlurkarteLive.FUEL_TYPES      = nil
+AutoDriveFlurkarteLive.FUEL_BY_INDEX   = nil
 AutoDriveFlurkarteLive.GROUND_TYPE_NAMES = {}
+
+-- ======================================================================
+-- HILFSFUNKTIONEN
+-- ======================================================================
+
+function AutoDriveFlurkarteLive:newArray()
+    return setmetatable({}, JSON_ARRAY_MT)
+end
+
+function AutoDriveFlurkarteLive:round(value, digits)
+    local factor = 10 ^ (digits or 0)
+    return math.floor((value or 0) * factor + 0.5) / factor
+end
+
+function AutoDriveFlurkarteLive:logError(scope, err)
+    print(string.format("[%s] %s: %s", self.MOD_NAME, tostring(scope), tostring(err)))
+end
+
+function AutoDriveFlurkarteLive:protected(scope, fn)
+    local ok, result = pcall(fn)
+    if not ok then
+        self:logError(scope, result)
+        return false, nil
+    end
+    return true, result
+end
+
+function AutoDriveFlurkarteLive:safeGet(fn, fallback)
+    local ok, val = pcall(fn)
+    if ok and val ~= nil then return val end
+    return fallback
+end
+
+function AutoDriveFlurkarteLive:getPlayerFarmId()
+    if g_currentMission == nil then return 0 end
+
+    if g_currentMission.getFarmId ~= nil then
+        local ok, farmId = pcall(function() return g_currentMission:getFarmId() end)
+        if ok and type(farmId) == "number" and farmId > 0 then
+            return farmId
+        end
+    end
+
+    if g_currentMission.player ~= nil then
+        return g_currentMission.player.farmId or 0
+    end
+
+    return 0
+end
 
 -- ======================================================================
 -- LIFECYCLE
@@ -30,22 +79,28 @@ AutoDriveFlurkarteLive.GROUND_TYPE_NAMES = {}
 
 function AutoDriveFlurkarteLive:loadMap(filename)
     self.isReady = true
-    self.timer   = self.UPDATE_INTERVAL
+    self.timer = self.UPDATE_INTERVAL
 
-    -- FieldGroundType Reverse-Lookup
+    self.GROUND_TYPE_NAMES = {}
     if FieldGroundType ~= nil then
-        for k, v in pairs(FieldGroundType) do
-            if type(v) == "number" then self.GROUND_TYPE_NAMES[v] = k end
+        for name, value in pairs(FieldGroundType) do
+            if type(value) == "number" then
+                self.GROUND_TYPE_NAMES[value] = name
+            end
         end
     end
 
-    -- Kraftstofftypen
-    self.FUEL_TYPES = {}
-    local function addFuel(ft, name, label)
-        if ft ~= nil then
-            table.insert(self.FUEL_TYPES, {ft = ft, name = name, label = label})
+    self.FUEL_TYPES = self:newArray()
+    self.FUEL_BY_INDEX = {}
+
+    local function addFuel(fillTypeIndex, name, label)
+        if fillTypeIndex ~= nil then
+            local entry = { index = fillTypeIndex, name = name, label = label }
+            table.insert(self.FUEL_TYPES, entry)
+            self.FUEL_BY_INDEX[fillTypeIndex] = entry
         end
     end
+
     addFuel(FillType.DIESEL,         "DIESEL",         "Diesel")
     addFuel(FillType.DEF,            "DEF",            "AdBlue")
     addFuel(FillType.ELECTRICCHARGE, "ELECTRICCHARGE", "Strom")
@@ -62,12 +117,13 @@ end
 
 function AutoDriveFlurkarteLive:update(dt)
     if not self.isReady or g_currentMission == nil then return end
+
     self.timer = self.timer + dt
     if self.timer >= self.UPDATE_INTERVAL then
         self.timer = 0
         local ok, err = pcall(function() self:exportAllData() end)
         if not ok then
-            print(string.format("[%s] Export-Fehler: %s", self.MOD_NAME, tostring(err)))
+            self:logError("Export-Fehler", err)
         end
     end
 end
@@ -78,108 +134,96 @@ end
 
 function AutoDriveFlurkarteLive:exportAllData()
     local data = {
-        version   = self.VERSION,
-        modName   = self.MOD_NAME,
-        timestamp = getDate("%Y-%m-%dT%H:%M:%S"),
-        mapName   = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),
-        currentDay    = self:safeGet(function() return g_currentMission.environment.currentDay    or 0  end, 0),
+        version       = self.VERSION,
+        modName       = self.MOD_NAME,
+        timestamp     = getDate("%Y-%m-%dT%H:%M:%S"),
+        mapName       = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),
+        currentDay    = self:safeGet(function() return g_currentMission.environment.currentDay or 0 end, 0),
         daysPerPeriod = self:safeGet(function() return g_currentMission.environment.daysPerPeriod or 24 end, 24),
-        farm      = self:collectFarm(),
-        fields    = self:collectFields(),
-        vehicles  = self:collectVehicles(),
-        animals   = self:collectAnimals(),
-        productions = self:collectProductions(),
-        contracts = self:collectContracts(),
-        market    = self:collectMarket(),
+        farm           = self:collectFarm(),
+        fields         = self:collectFields(),
+        vehicles       = self:collectVehicles(),
+        animals        = self:collectAnimals(),
+        productions    = self:collectProductions(),
+        contracts      = self:collectContracts(),
+        market         = self:collectMarket(),
     }
-    self:writeFile(self:jsonEncode(data))
-end
 
--- Hilfsfunktion: sicheres Ausführen mit Fallback
-function AutoDriveFlurkarteLive:safeGet(fn, fallback)
-    local ok, val = pcall(fn)
-    if ok and val ~= nil then return val end
-    return fallback
+    self:writeFile(self:jsonEncode(data))
 end
 
 -- ======================================================================
 -- HOF-INFORMATIONEN
--- API: g_farmManager, g_currentMission
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectFarm()
     local result = { name = "", farmId = 0, money = 0, loan = 0 }
-    local ok, _ = pcall(function()
-        -- g_currentMission:getFarmId() ist die konsistente Quelle
-        -- (identisch mit was collectFields() und g_farmlandManager.farmlands.farmId nutzen)
-        local playerFarmId = 0
-        local ok0, fid = pcall(function() return g_currentMission:getFarmId() end)
-        if ok0 and type(fid) == "number" and fid > 0 then
-            playerFarmId = fid
-        elseif g_currentMission and g_currentMission.player then
-            playerFarmId = g_currentMission.player.farmId or 0
+    local playerFarmId = self:getPlayerFarmId()
+    result.farmId = playerFarmId
+
+    local ok, err = pcall(function()
+        local farm = nil
+
+        if playerFarmId > 0 and g_farmManager ~= nil and g_farmManager.getFarmById ~= nil then
+            farm = g_farmManager:getFarmById(playerFarmId)
         end
 
-        local farm = nil
-        -- Farm-Objekt via ID holen (zuverlässigste Methode)
-        if playerFarmId > 0 and g_farmManager.getFarmById ~= nil then
-            local ok1, f = pcall(function() return g_farmManager:getFarmById(playerFarmId) end)
-            if ok1 and f then farm = f end
+        if farm == nil and g_farmManager ~= nil and g_farmManager.getLocalPlayerFarm ~= nil then
+            farm = g_farmManager:getLocalPlayerFarm()
         end
-        -- Fallback: getLocalPlayerFarm()
-        if farm == nil and g_farmManager.getLocalPlayerFarm ~= nil then
-            local ok2, f = pcall(function() return g_farmManager:getLocalPlayerFarm() end)
-            if ok2 and f then farm = f end
-        end
-        if farm == nil then
-            -- Nur farmId setzen damit fields-Filter noch funktioniert
-            result.farmId = playerFarmId
-            return
-        end
+
+        if farm == nil then return end
 
         result.farmId = playerFarmId > 0 and playerFarmId or (farm.farmId or 0)
-        result.name   = farm.name or ""
+        result.name = farm.name or ""
 
-        -- Geld: Property oder Methode
-        if     type(farm.money)   == "number" then result.money = math.floor(farm.money)
-        elseif type(farm.balance) == "number" then result.money = math.floor(farm.balance)
+        if type(farm.money) == "number" then
+            result.money = math.floor(farm.money)
+        elseif type(farm.balance) == "number" then
+            result.money = math.floor(farm.balance)
         elseif farm.getMoney ~= nil then
-            local ok2, v = pcall(function() return farm:getMoney() end)
-            if ok2 and v then result.money = math.floor(v) end
+            result.money = math.floor(farm:getMoney() or 0)
         end
-        -- Kredit
-        if     type(farm.loan) == "number" then result.loan = math.floor(farm.loan)
+
+        if type(farm.loan) == "number" then
+            result.loan = math.floor(farm.loan)
         elseif farm.getLoan ~= nil then
-            local ok2, v = pcall(function() return farm:getLoan() end)
-            if ok2 and v then result.loan = math.floor(v) end
+            result.loan = math.floor(farm:getLoan() or 0)
         end
     end)
+
+    if not ok then self:logError("collectFarm", err) end
     return result
 end
 
 -- ======================================================================
--- FELDDATEN – korrekte FS25 API aus FarmlandOverview-Mod abgeleitet
--- Statt g_fieldManager:getFields() + getFieldState() (buggy auf Zielonka):
---   → g_farmlandManager.farmlands   für Ownership (farmland.farmId, direkt)
---   → FSDensityMapUtil.getFruitTypeIndexAtWorldPos  für Fruchtart+Wachstum
---   → fruitType.minHarvestingGrowthState / maxHarvestingGrowthState (korrekte Namen!)
+-- FELDDATEN
+--
+-- Autoritative Quelle ist Field:getFieldState(). GIANTS verwendet FieldState selbst
+-- für Feldmissionen und stellt darüber Frucht, Wachstum, Boden- und Pflegestatus bereit.
+-- Keine Ein-Punkt-Abfrage in der Feldmitte mehr: ein einzelner Density-Map-Pixel darf
+-- nicht den Zustand eines kompletten Feldes bestimmen.
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectFields()
-    local result = {}
+    local result = self:newArray()
     if g_farmlandManager == nil or g_currentMission == nil then return result end
 
-    -- Eigene FarmId direkt aus Mission
-    local myFarmId = 0
-    local ok0, fid = pcall(function() return g_currentMission:getFarmId() end)
-    if ok0 and type(fid) == "number" then myFarmId = fid end
+    local myFarmId = self:getPlayerFarmId()
+    if myFarmId <= 0 then
+        self:logError("collectFields", "Spieler-FarmId konnte nicht ermittelt werden")
+        return result
+    end
 
     for _, farmland in pairs(g_farmlandManager.farmlands or {}) do
         if farmland.farmId == myFarmId and farmland.field ~= nil then
-            local ok2, fd = pcall(function()
-                return self:processFarmland(farmland, myFarmId)
-            end)
-            if ok2 and fd ~= nil then table.insert(result, fd) end
+            local ok, fieldData = self:protected(
+                "processFarmland " .. tostring(farmland.id or "?"),
+                function() return self:processFarmland(farmland, myFarmId) end
+            )
+            if ok and fieldData ~= nil then
+                table.insert(result, fieldData)
+            end
         end
     end
 
@@ -190,234 +234,233 @@ end
 function AutoDriveFlurkarteLive:processFarmland(farmland, myFarmId)
     local field = farmland.field
     local data = {
-        id             = field:getId() or 0,
-        farmlandId     = farmland.id  or 0,
-        farmId         = myFarmId,
-        area           = math.floor((farmland.field.areaHa or 0) * 100 + 0.5) / 100,
-        fruitType      = "NONE",
-        fruitTitle     = "Brache",
-        maxGrowthState = 0,
-        growthState    = 0,
-        growthName     = "FALLOW",
-        harvestReady   = false,
-        isWithered     = false,
-        groundType     = "NONE",
-        weedState      = 0,
-        sprayLevel     = 0,
-        limeLevel      = 0,
-        plowLevel      = 0,
+        id                = field:getId() or 0,
+        farmlandId        = farmland.id or 0,
+        farmId            = myFarmId,
+        area              = self:round(field.areaHa or 0, 2),
+        fruitType         = "NONE",
+        fruitTitle        = "Brache",
+        maxGrowthState    = 0,
+        growthState       = 0,
+        growthName        = "FALLOW",
+        harvestReady      = false,
+        isWithered        = false,
+        groundType        = "NONE",
+        weedState         = 0,
+        weedFactor        = 0,
+        stoneLevel        = 0,
+        sprayLevel        = 0,
+        sprayType         = 0,
+        limeLevel         = 0,
+        rollerLevel       = 0,
+        plowLevel         = 0,
+        stubbleShredLevel = 0,
+        waterLevel        = 0,
     }
 
-    -- Feldmitte für Density-Map-Abfrage
-    local x, z = nil, nil
-    local okPos, cx, cz = pcall(function()
-        return field:getCenterOfFieldWorldPosition()
-    end)
-    if okPos and cx ~= nil then x, z = cx, cz end
+    local fieldState = field:getFieldState()
+    if fieldState == nil or not fieldState.isValid then
+        return data
+    end
 
-    if x ~= nil then
-        -- Fruchtart + Wachstum NUR aus Density Map am Feldmittelpunkt.
-        -- Kein Fallback auf getFieldState().fruitTypeIndex!
-        -- Grund: getFieldState() liest das gesamte Polygon (Durchschnitt) →
-        -- beim Pflügen zeigt es noch alte Frucht/Erntereif weil 80% des Feldes
-        -- noch nicht gepflügt sind. FSDensityMapUtil liest den EXAKTEN Punkt.
-        local fruitIdx, growthState = FSDensityMapUtil.getFruitTypeIndexAtWorldPos(x, z)
+    data.groundType        = self.GROUND_TYPE_NAMES[fieldState.groundType] or tostring(fieldState.groundType or 0)
+    data.weedState         = fieldState.weedState or 0
+    data.weedFactor        = fieldState.weedFactor or 0
+    data.stoneLevel        = fieldState.stoneLevel or 0
+    data.sprayLevel        = fieldState.sprayLevel or 0
+    data.sprayType         = fieldState.sprayType or 0
+    data.limeLevel         = fieldState.limeLevel or 0
+    data.rollerLevel       = fieldState.rollerLevel or 0
+    data.plowLevel         = fieldState.plowLevel or 0
+    data.stubbleShredLevel = fieldState.stubbleShredLevel or 0
+    data.waterLevel        = fieldState.waterLevel or 0
 
-        if fruitIdx ~= nil and fruitIdx ~= 0 then
-            data.growthState = growthState or 0
-            local ft = g_fruitTypeManager:getFruitTypeByIndex(fruitIdx)
-            if ft ~= nil then
-                data.fruitType  = string.upper(ft.name or "UNKNOWN")
-                data.fruitTitle = (ft.fillType and ft.fillType.title) or ft.name or data.fruitType
+    local fruitIdx = fieldState.fruitTypeIndex
+    local unknownFruit = FruitType ~= nil and FruitType.UNKNOWN or 0
+    if fruitIdx == nil or fruitIdx == unknownFruit or fruitIdx == 0 then
+        return data
+    end
 
-                local minH  = ft.minHarvestingGrowthState or -1
-                local maxH  = ft.maxHarvestingGrowthState or -1
-                local cutSt = ft.cutState or -1
-                local withSt = maxH >= 0 and (maxH + 1) or -1
-                if ft.maxPreparingGrowthState ~= nil and ft.maxPreparingGrowthState >= 0 then
-                    withSt = ft.maxPreparingGrowthState + 1
-                end
-                data.maxGrowthState = maxH > 0 and maxH or (ft.numGrowthStates or 0)
+    local fruitType = g_fruitTypeManager and g_fruitTypeManager:getFruitTypeByIndex(fruitIdx) or nil
+    if fruitType == nil then
+        data.fruitType = "UNKNOWN"
+        data.fruitTitle = "Unbekannt"
+        return data
+    end
 
-                local gs = data.growthState
-                if cutSt >= 0 and gs == cutSt then
-                    data.growthName = "CUT"
-                elseif withSt >= 0 and gs == withSt then
-                    data.growthName = "WITHERED"; data.isWithered = true
-                elseif minH >= 0 and maxH >= 0 and gs >= minH and gs <= maxH then
-                    data.growthName = "READY_TO_HARVEST"; data.harvestReady = true
-                elseif ft.minPreparingGrowthState ~= nil and ft.minPreparingGrowthState >= 0
-                       and gs >= ft.minPreparingGrowthState
-                       and gs <= (ft.maxPreparingGrowthState or gs) then
-                    data.growthName = "GROWING"
-                elseif gs > 0 then
-                    data.growthName = "GROWING"
-                else
-                    data.growthName = "GERMINATING"
-                end
-            end
-        end
-        -- fruitIdx == nil/0: Feld ist leer oder Mittelpunkt wurde gerade bearbeitet → FALLOW bleibt
+    local growthState = fieldState.growthState or 0
+    data.fruitType = string.upper(fruitType.name or "UNKNOWN")
+    data.fruitTitle = (fruitType.fillType and fruitType.fillType.title) or fruitType.name or data.fruitType
+    data.growthState = growthState
+    data.maxGrowthState = fruitType.maxHarvestingGrowthState or fruitType.numGrowthStates or 0
 
-        -- getFieldState() NUR für Boden-Pflegedaten (weed/spray/lime/groundType für Anzeige)
-        -- groundType wird NICHT für harvestReady oder Fruchttyp verwendet
-        local okFs, fs = pcall(function() return field:getFieldState() end)
-        if okFs and fs ~= nil and fs.isValid then
-            data.groundType = self.GROUND_TYPE_NAMES[fs.groundType] or tostring(fs.groundType or 0)
-            data.weedState  = fs.weedState  or 0
-            data.sprayLevel = fs.sprayLevel or 0
-            data.limeLevel  = fs.limeLevel  or 0
-            data.plowLevel  = fs.plowLevel  or 0
+    -- GIANTS nutzt diese beiden Methoden selbst, z. B. in PlowMission.isAvailableForField().
+    local isCut = fruitType.getIsCut ~= nil and fruitType:getIsCut(growthState) or false
+    local isWithered = fruitType.getIsWithered ~= nil and fruitType:getIsWithered(growthState) or false
+
+    if isCut then
+        data.growthName = "CUT"
+        data.harvestReady = false
+    elseif isWithered then
+        data.growthName = "WITHERED"
+        data.isWithered = true
+        data.harvestReady = false
+    else
+        local minHarvest = fruitType.minHarvestingGrowthState or -1
+        local maxHarvest = fruitType.maxHarvestingGrowthState or -1
+
+        if minHarvest >= 0 and maxHarvest >= 0
+            and growthState >= minHarvest and growthState <= maxHarvest then
+            data.growthName = "READY_TO_HARVEST"
+            data.harvestReady = true
+        elseif growthState > 0 then
+            data.growthName = "GROWING"
+        else
+            data.growthName = "GERMINATING"
         end
     end
+
+    -- Sicherheitsregel: Ein bereits bearbeiteter Boden darf niemals als erntereif
+    -- ausgegeben werden, selbst wenn ein Mod-Feld einen veralteten Fruchtzustand meldet.
+    local workedGround = data.groundType == "PLOWED"
+        or data.groundType == "CULTIVATED"
+        or data.groundType == "SEEDBED"
+        or data.groundType == "ROLLED_SEEDBED"
+        or data.groundType == "ROLLER_LINES"
+        or data.groundType == "STUBBLE_TILLAGE"
+        or data.groundType == "RIDGE"
+        or data.groundType == "GRASS_CUT"
+
+    if workedGround and data.harvestReady then
+        data.harvestReady = false
+        data.growthName = "CUT"
+    end
+
     return data
 end
 
 -- ======================================================================
 -- FAHRZEUGDATEN
--- API: vehicle:getShowInVehiclesOverview(), vehicle:getOperatingTime() [ms!],
---      vehicle:getVehicleDamage(), vehicle:getPrice()
--- Doku: gdn.giants-software.com/.../class=888 (Vehicle)
--- Hinweis: operatingTime in FS25 ist MILLISEKUNDEN (calculateSellPrice: /60/60/1000)
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectVehicles()
-    local result = {}
+    local result = self:newArray()
     if g_currentMission == nil or g_currentMission.vehicles == nil then return result end
 
     for _, vehicle in ipairs(g_currentMission.vehicles) do
-        local ok, vd = pcall(function() return self:processVehicle(vehicle) end)
-        if ok and vd ~= nil then table.insert(result, vd) end
+        local ok, vehicleData = self:protected(
+            "processVehicle " .. tostring(vehicle.typeName or "?"),
+            function() return self:processVehicle(vehicle) end
+        )
+        if ok and vehicleData ~= nil then
+            table.insert(result, vehicleData)
+        end
     end
+
     return result
 end
 
 function AutoDriveFlurkarteLive:processVehicle(vehicle)
-    -- Paletten immer überspringen
     if vehicle.spec_pallet ~= nil then return nil end
 
-    -- Eigentumscheck: getOwnerFarmId() Methode (laut Vehicle-Doku class=888)
     local ownerId = 0
     if vehicle.getOwnerFarmId ~= nil then
-        local ok, val = pcall(function() return vehicle:getOwnerFarmId() end)
-        if ok and type(val) == "number" then ownerId = val end
+        ownerId = vehicle:getOwnerFarmId() or 0
     end
-    -- Fallback: direkte Property
     if ownerId <= 0 then ownerId = vehicle.ownerFarmId or 0 end
-    -- Fallback 2: PropertyState (OWNED=1, LEASED=2 → Spieler-Fahrzeug)
-    if ownerId <= 0 and vehicle.getPropertyState ~= nil then
-        local ok, ps = pcall(function() return vehicle:getPropertyState() end)
-        if ok and ps ~= nil then
-            -- VehiclePropertyState.OWNED=1, LEASED=2 bedeutet es gehört dem Spieler
-            if ps == 1 or ps == 2 then ownerId = 1 end
-        end
-    end
     if ownerId <= 0 then return nil end
 
-    -- Kategorie
     local isMotorized = vehicle.spec_motorized ~= nil
-    local isTrailer   = vehicle.spec_trailer   ~= nil
-    local category    = "IMPLEMENT"
-    if isMotorized then category = "VEHICLE" elseif isTrailer then category = "TRAILER" end
+    local isTrailer = vehicle.spec_trailer ~= nil
+    local category = "IMPLEMENT"
+    if isMotorized then
+        category = "VEHICLE"
+    elseif isTrailer then
+        category = "TRAILER"
+    end
 
     local data = {
         name            = vehicle:getFullName() or "Unbekannt",
         typeName        = vehicle.typeName or "",
         vehicleCategory = category,
-        farmId          = vehicle.ownerFarmId or 0,
-        -- operatingTime: Vehicle-Doku zeigt "/60/60/1000" → Millisekunden!
-        operatingHours  = math.floor((vehicle:getOperatingTime() or 0) / 3600000 * 10) / 10,
-        -- getVehicleDamage() ist die offizielle Methode (Vehicle-Doku)
-        wear            = math.floor((vehicle:getVehicleDamage() or 0) * 1000) / 1000,
+        farmId          = ownerId,
+        operatingHours  = self:round((vehicle:getOperatingTime() or 0) / 3600000, 1),
+        wear            = self:round(vehicle:getVehicleDamage() or 0, 3),
         dirt            = 0,
         price           = math.floor(vehicle:getPrice() or 0),
-        fuel            = {},
-        cargo           = {},
-        isWorking       = vehicle:getIsAIActive(),
+        fuel            = self:newArray(),
+        cargo           = self:newArray(),
+        isWorking       = self:safeGet(function() return vehicle:getIsAIActive() end, false),
         uniqueId        = "",
     }
 
-    -- uniqueId für zuverlässiges Matching mit vehicles.xml (Vehicle-Doku: getUniqueId())
     if vehicle.getUniqueId ~= nil then
-        local ok, val = pcall(function() return vehicle:getUniqueId() end)
-        if ok and val ~= nil then data.uniqueId = tostring(val) end
+        local value = vehicle:getUniqueId()
+        if value ~= nil then data.uniqueId = tostring(value) end
     end
 
-    -- Dreck via Washable-Spec
-    if vehicle.spec_washable ~= nil then
-        local ok, val = pcall(function() return vehicle.spec_washable:getDirtAmount() end)
-        if ok and val ~= nil then data.dirt = math.floor(val * 1000) / 1000 end
+    -- Washable registriert getDirtAmount() direkt auf dem Fahrzeugtyp.
+    if vehicle.getDirtAmount ~= nil then
+        data.dirt = self:round(vehicle:getDirtAmount() or 0, 3)
     end
 
-    -- Kraftstoff: bekannte Typen direkt abfragen
-    local fuelTypeSet = {}
-    for _, ft in ipairs(self.FUEL_TYPES) do
-        local unit = vehicle:getFirstFillUnitWithType(ft.ft)
-        if unit ~= nil then
-            local level    = vehicle:getFillUnitFillLevel(unit) or 0
-            local capacity = vehicle:getFillUnitCapacity(unit)  or 0
-            if capacity > 0 then
-                table.insert(data.fuel, {
-                    fillType = ft.name,
-                    label    = ft.label,
-                    liters   = math.floor(level * 10) / 10,
-                    capacity = math.floor(capacity),
-                    percent  = math.floor(math.min(100, level / capacity * 100)),
-                })
-                fuelTypeSet[ft.ft] = true
-            end
-        end
-    end
+    -- FillUnit direkt über die offiziell registrierten Fahrzeugfunktionen auslesen.
+    -- getFillLevelInformation() erwartet ein HUD-Displayobjekt und ist für diesen Export
+    -- nicht die passende API.
+    if vehicle.getFillUnits ~= nil then
+        for fillUnitIndex, _ in ipairs(vehicle:getFillUnits()) do
+            local fillTypeIndex = vehicle:getFillUnitFillType(fillUnitIndex)
+            local level = vehicle:getFillUnitFillLevel(fillUnitIndex) or 0
+            local capacity = vehicle:getFillUnitCapacity(fillUnitIndex) or 0
 
-    -- Ladung: alle übrigen Fülleinheiten
-    local fillInfos = {}
-    vehicle:getFillLevelInformation(fillInfos)
-    for _, info in ipairs(fillInfos) do
-        if not fuelTypeSet[info.fillType] then
-            local cap = info.capacity or 0
-            local lvl = info.fillLevel or 0
-            if cap > 0 and lvl > 0.01 then
-                local ftName, ftTitle = "", info.title or ""
-                if info.fillType ~= nil then
-                    local ft = g_fillTypeManager:getFillTypeByIndex(info.fillType)
-                    if ft ~= nil then
-                        ftName  = ft.name  or ""
-                        ftTitle = ft.title or ftTitle
+            if fillTypeIndex ~= nil and fillTypeIndex ~= FillType.UNKNOWN and capacity > 0 then
+                local fuelType = self.FUEL_BY_INDEX and self.FUEL_BY_INDEX[fillTypeIndex] or nil
+
+                if fuelType ~= nil then
+                    table.insert(data.fuel, {
+                        fillType = fuelType.name,
+                        label    = fuelType.label,
+                        liters   = self:round(level, 1),
+                        capacity = math.floor(capacity),
+                        percent  = math.floor(math.min(100, level / capacity * 100)),
+                    })
+                elseif level > 0.01 then
+                    local fillType = g_fillTypeManager and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
+                    local fillTypeName = fillType and fillType.name or ""
+                    if fillTypeName ~= "" and fillTypeName ~= "UNKNOWN"
+                        and fillTypeName ~= "AIR" and fillTypeName ~= "BALE_NET" then
+                        table.insert(data.cargo, {
+                            fillType = fillTypeName,
+                            title    = fillType and fillType.title or fillTypeName,
+                            liters   = self:round(level, 1),
+                            capacity = math.floor(capacity),
+                            percent  = math.floor(math.min(100, level / capacity * 100)),
+                        })
                     end
                 end
-                if ftName ~= "" and ftName ~= "UNKNOWN"
-                    and ftName ~= "AIR" and ftName ~= "BALE_NET" then
-                    table.insert(data.cargo, {
-                        fillType = ftName,
-                        title    = ftTitle,
-                        liters   = math.floor(lvl * 10) / 10,
-                        capacity = math.floor(cap),
-                        percent  = math.floor(math.min(100, lvl / cap * 100)),
-                    })
-                end
             end
         end
     end
+
     return data
 end
 
 -- ======================================================================
 -- TIERHALTUNG
--- In FS25 sind Nutztiere in Placeables mit spec_animalHusbandry (nicht in
--- der Animals-Doku – dort ist nur der Hund!).
--- API: g_currentMission.placeables, placeable.spec_animalHusbandry
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectAnimals()
-    local result = {}
+    local result = self:newArray()
     if g_currentMission == nil or g_currentMission.placeables == nil then return result end
 
     for _, placeable in pairs(g_currentMission.placeables) do
-        local ok, data = pcall(function()
-            return self:processHusbandry(placeable)
-        end)
+        local ok, data = self:protected(
+            "processHusbandry " .. tostring(placeable.typeName or "?"),
+            function() return self:processHusbandry(placeable) end
+        )
         if ok and data ~= nil then table.insert(result, data) end
     end
+
     return result
 end
 
@@ -426,16 +469,15 @@ function AutoDriveFlurkarteLive:processHusbandry(placeable)
     if spec == nil then return nil end
 
     local data = {
-        species     = "",
-        name        = placeable:getName() or "",
-        farmId      = placeable.ownerFarmId or 0,
-        numAnimals  = 0,
-        health      = 0,
+        species      = "",
+        name         = placeable:getName() or "",
+        farmId       = placeable.ownerFarmId or 0,
+        numAnimals   = 0,
+        health       = 0,
         reproduction = 0,
-        clusters    = {},
+        clusters     = self:newArray(),
     }
 
-    -- Tierspezies aus dem ersten Cluster ermitteln
     local clusters = nil
     if spec.getAnimalClusters ~= nil then
         clusters = spec:getAnimalClusters()
@@ -445,23 +487,20 @@ function AutoDriveFlurkarteLive:processHusbandry(placeable)
 
     if clusters ~= nil then
         local totalAnimals = 0
-        local totalHealth  = 0
-        local totalRepro   = 0
-        local clusterCount = 0
+        local weightedHealth = 0
+        local weightedReproduction = 0
 
         for _, cluster in pairs(clusters) do
-            local num    = cluster.numAnimals  or (cluster.getNumAnimals and cluster:getNumAnimals()) or 0
+            local num = cluster.numAnimals or (cluster.getNumAnimals and cluster:getNumAnimals()) or 0
             local health = cluster.health or 0
-            local repro  = cluster.reproductionEfficiency or cluster.reproduction or 0
+            local reproduction = cluster.reproductionEfficiency or cluster.reproduction or 0
 
-            -- Normalisieren (manche Werte >1 = Prozent-Skalierung)
-            if health > 1  then health = health / 100 end
-            if repro  > 1  then repro  = repro  / 100 end
+            if health > 1 then health = health / 100 end
+            if reproduction > 1 then reproduction = reproduction / 100 end
 
             totalAnimals = totalAnimals + num
-            totalHealth  = totalHealth  + health
-            totalRepro   = totalRepro   + repro
-            clusterCount = clusterCount + 1
+            weightedHealth = weightedHealth + health * num
+            weightedReproduction = weightedReproduction + reproduction * num
 
             if data.species == "" then
                 data.species = cluster.species
@@ -471,14 +510,16 @@ function AutoDriveFlurkarteLive:processHusbandry(placeable)
 
             table.insert(data.clusters, {
                 numAnimals   = num,
-                health       = math.floor(health * 1000) / 1000,
-                reproduction = math.floor(repro  * 1000) / 1000,
+                health       = self:round(health, 3),
+                reproduction = self:round(reproduction, 3),
             })
         end
 
-        data.numAnimals  = totalAnimals
-        data.health      = clusterCount > 0 and math.floor(totalHealth / clusterCount * 1000) / 1000 or 0
-        data.reproduction = clusterCount > 0 and math.floor(totalRepro  / clusterCount * 1000) / 1000 or 0
+        data.numAnimals = totalAnimals
+        if totalAnimals > 0 then
+            data.health = self:round(weightedHealth / totalAnimals, 3)
+            data.reproduction = self:round(weightedReproduction / totalAnimals, 3)
+        end
     end
 
     if data.numAnimals == 0 and #data.clusters == 0 then return nil end
@@ -487,84 +528,86 @@ end
 
 -- ======================================================================
 -- PRODUKTIONSANLAGEN
--- In FS25: Placeables mit spec_productionPoint
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectProductions()
-    local result = {}
+    local result = self:newArray()
     if g_currentMission == nil or g_currentMission.placeables == nil then return result end
 
     for _, placeable in pairs(g_currentMission.placeables) do
-        local ok, data = pcall(function()
-            return self:processProduction(placeable)
-        end)
+        local ok, data = self:protected(
+            "processProduction " .. tostring(placeable.typeName or "?"),
+            function() return self:processProduction(placeable) end
+        )
         if ok and data ~= nil then table.insert(result, data) end
     end
+
     return result
 end
 
 function AutoDriveFlurkarteLive:processProduction(placeable)
     local spec = placeable.spec_productionPoint
-    if spec == nil then return nil end
+    if spec == nil or spec.productionPoint == nil then return nil end
 
-    local pp = spec.productionPoint
-    if pp == nil then return nil end
-
-    -- Nur eigene Produktionen
     local farmId = placeable.ownerFarmId or 0
-    if farmId == 0 then return nil end
+    local playerFarmId = self:getPlayerFarmId()
+    if farmId <= 0 or (playerFarmId > 0 and farmId ~= playerFarmId) then return nil end
 
+    local productionPoint = spec.productionPoint
     local data = {
-        name       = placeable:getName() or "",
-        farmId     = farmId,
-        productions = {},
-        storages    = {},
+        name        = placeable:getName() or "",
+        farmId      = farmId,
+        productions = self:newArray(),
+        storages    = self:newArray(),
     }
 
-    -- Produktionen
-    if pp.getProductions ~= nil then
-        for _, prod in ipairs(pp:getProductions()) do
-            local pData = {
-                name      = prod.name or "",
-                status    = tostring(prod.status or ""),
-                cyclesPerHour = prod.cyclesPerHour or 0,
-                inputs    = {},
-                outputs   = {},
+    if productionPoint.getProductions ~= nil then
+        for _, production in ipairs(productionPoint:getProductions()) do
+            local productionData = {
+                name          = production.name or "",
+                status        = tostring(production.status or ""),
+                cyclesPerHour = production.cyclesPerHour or 0,
+                inputs        = self:newArray(),
+                outputs       = self:newArray(),
             }
-            if prod.inputs ~= nil then
-                for _, inp in ipairs(prod.inputs) do
-                    local ft = g_fillTypeManager:getFillTypeByIndex(inp.type)
-                    table.insert(pData.inputs, {
-                        fillType = ft and ft.name or tostring(inp.type),
-                        amount   = inp.amount or 0,
+
+            if production.inputs ~= nil then
+                for _, input in ipairs(production.inputs) do
+                    local fillType = g_fillTypeManager:getFillTypeByIndex(input.type)
+                    table.insert(productionData.inputs, {
+                        fillType = fillType and fillType.name or tostring(input.type),
+                        amount   = input.amount or 0,
                     })
                 end
             end
-            if prod.outputs ~= nil then
-                for _, out in ipairs(prod.outputs) do
-                    local ft = g_fillTypeManager:getFillTypeByIndex(out.type)
-                    table.insert(pData.outputs, {
-                        fillType = ft and ft.name or tostring(out.type),
-                        amount   = out.amount or 0,
+
+            if production.outputs ~= nil then
+                for _, output in ipairs(production.outputs) do
+                    local fillType = g_fillTypeManager:getFillTypeByIndex(output.type)
+                    table.insert(productionData.outputs, {
+                        fillType = fillType and fillType.name or tostring(output.type),
+                        amount   = output.amount or 0,
                     })
                 end
             end
-            table.insert(data.productions, pData)
+
+            table.insert(data.productions, productionData)
         end
     end
 
-    -- Füllstände der Lager
-    if pp.storage ~= nil and pp.storage.fillLevels ~= nil then
-        for fillType, level in pairs(pp.storage.fillLevels) do
+    if productionPoint.storage ~= nil and productionPoint.storage.fillLevels ~= nil then
+        for fillTypeIndex, level in pairs(productionPoint.storage.fillLevels) do
             if level > 0 then
-                local ft = g_fillTypeManager:getFillTypeByIndex(fillType)
-                local cap = pp.storage.capacities and pp.storage.capacities[fillType] or 0
+                local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
+                local capacity = productionPoint.storage.capacities
+                    and productionPoint.storage.capacities[fillTypeIndex] or 0
+
                 table.insert(data.storages, {
-                    fillType = ft and ft.name or tostring(fillType),
-                    title    = ft and ft.title or "",
+                    fillType = fillType and fillType.name or tostring(fillTypeIndex),
+                    title    = fillType and fillType.title or "",
                     level    = math.floor(level),
-                    capacity = math.floor(cap),
-                    percent  = cap > 0 and math.floor(math.min(100, level / cap * 100)) or 0,
+                    capacity = math.floor(capacity),
+                    percent  = capacity > 0 and math.floor(math.min(100, level / capacity * 100)) or 0,
                 })
             end
         end
@@ -576,29 +619,28 @@ end
 
 -- ======================================================================
 -- VERTRÄGE / MISSIONS
--- API: g_missionManager
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectContracts()
-    local result = {}
+    local result = self:newArray()
     if g_missionManager == nil then return result end
 
     local missions = nil
-    local ok = pcall(function()
-        missions = g_missionManager:getMissions()
-    end)
-    if not ok or missions == nil then
-        -- Fallback: direkte Property
+    local ok, err = pcall(function() missions = g_missionManager:getMissions() end)
+    if not ok then
+        self:logError("getMissions", err)
         missions = g_missionManager.missions
     end
     if missions == nil then return result end
 
     for _, mission in pairs(missions) do
-        local mok, mdata = pcall(function()
-            return self:processMission(mission)
-        end)
-        if mok and mdata ~= nil then table.insert(result, mdata) end
+        local missionOk, missionData = self:protected(
+            "processMission " .. tostring(mission.type or mission.className or "?"),
+            function() return self:processMission(mission) end
+        )
+        if missionOk and missionData ~= nil then table.insert(result, missionData) end
     end
+
     return result
 end
 
@@ -606,56 +648,45 @@ function AutoDriveFlurkarteLive:processMission(mission)
     if mission == nil then return nil end
 
     local data = {
-        type       = tostring(mission.type or mission.className or ""),
-        title      = "",
-        reward     = 0,
-        fieldId    = 0,
-        isActive   = false,
-        progress   = 0,
-        deadline   = 0,
-        farmId     = 0,
+        type     = tostring(mission.type or mission.className or ""),
+        title    = "",
+        reward   = 0,
+        fieldId  = 0,
+        isActive = false,
+        progress = 0,
+        deadline = 0,
+        farmId   = mission.farmId or 0,
     }
 
-    -- Titel
     if mission.getTitle ~= nil then
-        local ok, t = pcall(function() return mission:getTitle() end)
-        if ok and t then data.title = tostring(t) end
+        data.title = tostring(mission:getTitle() or "")
     end
 
-    -- Belohnung
     if mission.getReward ~= nil then
-        local ok, r = pcall(function() return mission:getReward() end)
-        if ok and r then data.reward = math.floor(r) end
+        data.reward = math.floor(mission:getReward() or 0)
     elseif mission.reward ~= nil then
         data.reward = math.floor(mission.reward)
     end
 
-    -- Feld-ID
-    if mission.field ~= nil and mission.field.id ~= nil then
-        data.fieldId = mission.field.id
-    elseif mission.field ~= nil and mission.field.getId ~= nil then
-        local ok, fid = pcall(function() return mission.field:getId() end)
-        if ok and fid then data.fieldId = fid end
+    if mission.field ~= nil then
+        if mission.field.getId ~= nil then
+            data.fieldId = mission.field:getId() or 0
+        elseif mission.field.id ~= nil then
+            data.fieldId = mission.field.id
+        end
     end
 
-    -- Status
     if mission.getIsActive ~= nil then
-        local ok, a = pcall(function() return mission:getIsActive() end)
-        if ok then data.isActive = a == true end
+        data.isActive = mission:getIsActive() == true
     elseif mission.status ~= nil then
-        data.isActive = (mission.status == "ACTIVE")
+        data.isActive = tostring(mission.status) == "ACTIVE"
     end
 
-    -- Fortschritt (0-1)
     if mission.getProgress ~= nil then
-        local ok, p = pcall(function() return mission:getProgress() end)
-        if ok and p then data.progress = math.floor(p * 100) end
+        data.progress = math.floor((mission:getProgress() or 0) * 100)
     elseif mission.completionProgress ~= nil then
         data.progress = math.floor((mission.completionProgress or 0) * 100)
     end
-
-    -- Farm-ID
-    data.farmId = mission.farmId or 0
 
     return data
 end
@@ -665,45 +696,43 @@ end
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectMarket()
-    local result = {}
+    local result = self:newArray()
     if g_fillTypeManager == nil then return result end
 
-    -- Einmalig: Set aller FillType-Indizes die zu einem Fruchtyp gehören
     local fruitFillTypeIndices = {}
     if g_fruitTypeManager ~= nil then
-        for _, ft in pairs(g_fruitTypeManager.fruitTypes or {}) do
-            if ft.fillType ~= nil and ft.fillType.index ~= nil then
-                fruitFillTypeIndices[ft.fillType.index] = true
+        for _, fruitType in pairs(g_fruitTypeManager.fruitTypes or {}) do
+            if fruitType.fillType ~= nil and fruitType.fillType.index ~= nil then
+                fruitFillTypeIndices[fruitType.fillType.index] = true
             end
         end
     end
 
-    local econManager = g_currentMission and g_currentMission.economyManager
+    local economyManager = g_currentMission and g_currentMission.economyManager
 
-    for _, ft in pairs(g_fillTypeManager.fillTypes) do
-        if ft ~= nil and ft.pricePerLiter ~= nil and ft.pricePerLiter > 0
-           and ft.pricePerLiter <= 2.0 then
-            local basePrice = ft.pricePerLiter * 1000
+    -- Keine willkürliche Preisobergrenze: auch hochwertige Produktionsgüter müssen
+    -- im Markt-Tab ankommen.
+    for _, fillType in pairs(g_fillTypeManager.fillTypes or {}) do
+        if fillType ~= nil and fillType.pricePerLiter ~= nil and fillType.pricePerLiter > 0 then
+            local basePrice = fillType.pricePerLiter * 1000
             local currentPrice = basePrice
 
-            if econManager ~= nil then
-                local ok, mult = pcall(function()
-                    return econManager:getPriceMultiplier(ft.index)
+            if economyManager ~= nil and economyManager.getPriceMultiplier ~= nil then
+                local ok, multiplier = pcall(function()
+                    return economyManager:getPriceMultiplier(fillType.index)
                 end)
-                if ok and mult ~= nil and mult > 0 then
-                    currentPrice = basePrice * mult
+                if ok and multiplier ~= nil and multiplier > 0 then
+                    currentPrice = basePrice * multiplier
                 end
             end
 
             if currentPrice > 1 then
-                -- Kategorie: Frucht (Acker-Anbau) oder Produkt (Verarbeitung/Tier)
-                local isFruit = fruitFillTypeIndices[ft.index] == true
                 table.insert(result, {
-                    fillType     = ft.name or "",
-                    title        = ft.title or ft.name or "",
+                    fillType     = fillType.name or "",
+                    title        = fillType.title or fillType.name or "",
                     pricePerTon  = math.floor(currentPrice),
                     basePriceTon = math.floor(basePrice),
-                    category     = isFruit and "crop" or "product",
+                    category     = fruitFillTypeIndices[fillType.index] and "crop" or "product",
                 })
             end
         end
@@ -712,51 +741,94 @@ function AutoDriveFlurkarteLive:collectMarket()
     table.sort(result, function(a, b) return a.pricePerTon > b.pricePerTon end)
     return result
 end
+
 -- ======================================================================
 -- DATEI SCHREIBEN
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:writeFile(content)
-    local base   = getUserProfileAppPath()
-    local modDir = base .. "modSettings/" .. self.SETTINGS_DIR .. "/"
-    createFolder(base .. "modSettings/")
+    local base = getUserProfileAppPath()
+    local modSettingsDir = base .. "modSettings/"
+    local modDir = modSettingsDir .. self.SETTINGS_DIR .. "/"
+    local targetPath = modDir .. self.OUTPUT_FILE
+    local tempPath = targetPath .. ".tmp"
+
+    createFolder(modSettingsDir)
     createFolder(modDir)
-    local file = io.open(modDir .. self.OUTPUT_FILE, "w")
-    if file then file:write(content); file:close() end
+
+    -- Erst vollständig in eine temporäre Datei schreiben. So kann PHP niemals eine
+    -- halb geschriebene JSON-Datei lesen.
+    local file, openError = io.open(tempPath, "w")
+    if file == nil then
+        self:logError("writeFile", openError or "Temporäre Datei konnte nicht geöffnet werden")
+        return
+    end
+
+    local ok, writeError = file:write(content)
+    file:close()
+    if not ok then
+        self:logError("writeFile", writeError or "Schreiben fehlgeschlagen")
+        os.remove(tempPath)
+        return
+    end
+
+    -- Windows überschreibt beim Rename eine existierende Datei nicht zuverlässig.
+    -- Die Zieldatei wird deshalb erst nach erfolgreichem Temp-Write ersetzt.
+    os.remove(targetPath)
+    local renamed, renameError = os.rename(tempPath, targetPath)
+    if not renamed then
+        self:logError("writeFile rename", renameError or "Umbenennen fehlgeschlagen")
+    end
 end
 
 -- ======================================================================
 -- JSON ENCODER
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:jsonEncode(val)
-    local t = type(val)
-    if t == "nil" then return "null"
-    elseif t == "boolean" then return val and "true" or "false"
-    elseif t == "number" then
-        if val ~= val or val == math.huge or val == -math.huge then return "null" end
-        if math.floor(val) == val and math.abs(val) < 2^53 then
-            return string.format("%d", val)
-        else return string.format("%.4f", val) end
-    elseif t == "string" then
-        val = val:gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n'):gsub('\r','\\r'):gsub('\t','\\t')
-        return '"' .. val .. '"'
-    elseif t == "table" then
-        local len = #val
-        local kc  = 0; for _ in pairs(val) do kc = kc + 1 end
-        local parts = {}
-        if len > 0 and kc == len then
-            for i = 1, len do parts[i] = self:jsonEncode(val[i]) end
-            return "[" .. table.concat(parts, ",") .. "]"
-        else
-            for k, v in pairs(val) do
-                if type(k) == "string" then
-                    table.insert(parts, '"'..k..'":' .. self:jsonEncode(v))
-                end
-            end
-            return "{" .. table.concat(parts, ",") .. "}"
+function AutoDriveFlurkarteLive:jsonEncode(value)
+    local valueType = type(value)
+
+    if valueType == "nil" then
+        return "null"
+    elseif valueType == "boolean" then
+        return value and "true" or "false"
+    elseif valueType == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then return "null" end
+        if math.floor(value) == value and math.abs(value) < 2^53 then
+            return string.format("%d", value)
         end
-    else return '"' .. tostring(val) .. '"' end
+        return string.format("%.4f", value)
+    elseif valueType == "string" then
+        value = value:gsub('\\', '\\\\')
+            :gsub('"', '\\"')
+            :gsub('\n', '\\n')
+            :gsub('\r', '\\r')
+            :gsub('\t', '\\t')
+        return '"' .. value .. '"'
+    elseif valueType == "table" then
+        local meta = getmetatable(value)
+        local forceArray = meta ~= nil and meta.__jsonArray == true
+        local length = #value
+        local keyCount = 0
+        for _ in pairs(value) do keyCount = keyCount + 1 end
+
+        local parts = {}
+        if forceArray or (length > 0 and keyCount == length) then
+            for i = 1, length do
+                parts[i] = self:jsonEncode(value[i])
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+
+        for key, item in pairs(value) do
+            if type(key) == "string" then
+                table.insert(parts, self:jsonEncode(key) .. ":" .. self:jsonEncode(item))
+            end
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+
+    return self:jsonEncode(tostring(value))
 end
 
 -- ======================================================================
