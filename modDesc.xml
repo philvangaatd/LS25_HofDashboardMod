@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>AutoDrive Flurkarte</author>
-    <version>1.0.0.0</version>
+    <version>4.0.0.0</version>
     <title>
         <en>AutoDrive Flurkarte - Live Export</en>
         <de>AutoDrive Flurkarte - Live Export</de>
     </title>
     <description>
-        <en>Exports live farm data every 30 seconds for the AutoDrive Flurkarte web dashboard.
+        <en>Exports live farm data every 15 seconds for the AutoDrive Flurkarte web dashboard.
 Writes to: modSettings/AutoDriveFlurkarte/liveData.json</en>
-        <de>Exportiert alle 30 Sekunden Live-Farmdaten für das AutoDrive Flurkarte Web-Dashboard.
+        <de>Exportiert alle 15 Sekunden Live-Farmdaten für das AutoDrive Flurkarte Web-Dashboard.
 Schreibt nach: modSettings/AutoDriveFlurkarte/liveData.json</de>
     </description>
     <multiplayer supported="false"/>
