@@ -1,5 +1,5 @@
 --[[
-    FS25_AutoDriveFlurkarte – Live Data Export v4.0
+    FS25_AutoDriveFlurkarte – Live Data Export v4.1
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/AutoDriveFlurkarte/liveData.json
@@ -14,10 +14,11 @@ local JSON_ARRAY_MT = { __jsonArray = true }
 
 AutoDriveFlurkarteLive                 = {}
 AutoDriveFlurkarteLive.MOD_NAME        = MODNAME
-AutoDriveFlurkarteLive.VERSION         = "4.0.0"
+AutoDriveFlurkarteLive.VERSION         = "4.1.0"
 AutoDriveFlurkarteLive.SETTINGS_DIR    = "AutoDriveFlurkarte"
 AutoDriveFlurkarteLive.OUTPUT_FILE     = "liveData.json"
 AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000
+AutoDriveFlurkarteLive.FIELD_SAMPLE_TARGET = 81
 AutoDriveFlurkarteLive.timer           = 0
 AutoDriveFlurkarteLive.isReady         = false
 AutoDriveFlurkarteLive.FUEL_TYPES      = nil
@@ -73,6 +74,340 @@ function AutoDriveFlurkarteLive:getPlayerFarmId()
     return 0
 end
 
+function AutoDriveFlurkarteLive:getGroundTypeName(value)
+    return self.GROUND_TYPE_NAMES[value] or tostring(value or 0)
+end
+
+function AutoDriveFlurkarteLive:isWorkedGroundType(value)
+    if FieldGroundType == nil then return false end
+    return value == FieldGroundType.PLOWED
+        or value == FieldGroundType.CULTIVATED
+        or value == FieldGroundType.SEEDBED
+        or value == FieldGroundType.ROLLED_SEEDBED
+        or value == FieldGroundType.ROLLER_LINES
+        or value == FieldGroundType.STUBBLE_TILLAGE
+        or value == FieldGroundType.RIDGE
+        or value == FieldGroundType.GRASS_CUT
+end
+
+function AutoDriveFlurkarteLive:isGrowingGroundType(value)
+    if FieldGroundType == nil then return false end
+    return value == FieldGroundType.SOWN
+        or value == FieldGroundType.DIRECT_SOWN
+        or value == FieldGroundType.RIDGE_SOWN
+        or value == FieldGroundType.PLANTED
+        or value == FieldGroundType.GRASS
+end
+
+function AutoDriveFlurkarteLive:pointInPolygon(x, z, polygon)
+    local inside = false
+    local j = #polygon
+
+    for i = 1, #polygon do
+        local xi, zi = polygon[i].x, polygon[i].z
+        local xj, zj = polygon[j].x, polygon[j].z
+        local intersects = ((zi > z) ~= (zj > z))
+            and (x < (xj - xi) * (z - zi) / (zj - zi) + xi)
+        if intersects then inside = not inside end
+        j = i
+    end
+
+    return inside
+end
+
+function AutoDriveFlurkarteLive:getDominantKey(counts)
+    local bestKey = nil
+    local bestCount = -1
+    for key, count in pairs(counts) do
+        if count > bestCount then
+            bestKey = key
+            bestCount = count
+        end
+    end
+    return bestKey, math.max(0, bestCount)
+end
+
+function AutoDriveFlurkarteLive:classifyFieldState(fieldState)
+    if fieldState == nil or not fieldState.isValid then return "INVALID", nil end
+
+    -- Ein real bearbeiteter Boden hat Vorrang vor eventuell noch vorhandenen
+    -- Fruchtbits. Dadurch wird ein gepflügter/gegrubberter Bereich nicht mehr als
+    -- erntereif erkannt, nur weil dort noch ein alter Fruchtzustand gemeldet wird.
+    if self:isWorkedGroundType(fieldState.groundType) then
+        return "TILLED", nil
+    end
+
+    local fruitIdx = fieldState.fruitTypeIndex
+    local unknownFruit = FruitType ~= nil and FruitType.UNKNOWN or 0
+    if fruitIdx == nil or fruitIdx == unknownFruit or fruitIdx == 0 then
+        return "FALLOW", nil
+    end
+
+    local fruitType = g_fruitTypeManager and g_fruitTypeManager:getFruitTypeByIndex(fruitIdx) or nil
+    if fruitType == nil then
+        return "FALLOW", nil
+    end
+
+    local growthState = fieldState.growthState or 0
+    if fruitType.getIsWithered ~= nil and fruitType:getIsWithered(growthState) then
+        return "WITHERED", fruitType
+    end
+    if fruitType.getIsCut ~= nil and fruitType:getIsCut(growthState) then
+        return "HARVESTED", fruitType
+    end
+
+    local minHarvest = fruitType.minHarvestingGrowthState or -1
+    local maxHarvest = fruitType.maxHarvestingGrowthState or -1
+    if minHarvest >= 0 and maxHarvest >= 0
+        and growthState >= minHarvest and growthState <= maxHarvest then
+        return "READY", fruitType
+    end
+
+    return "GROWING", fruitType
+end
+
+function AutoDriveFlurkarteLive:sampleField(field)
+    local polygon = {}
+    local polygonNodes = field:getPolygonPoints() or {}
+
+    for _, point in ipairs(polygonNodes) do
+        local x, _, z = getWorldTranslation(point)
+        table.insert(polygon, {x = x, z = z})
+    end
+
+    local statusCounts = {}
+    local groundCounts = {}
+    local fruitCounts = {}
+    local growthCountsByFruit = {}
+    local fruitDescs = {}
+    local totalSamples = 0
+
+    local sums = {
+        weedState = 0,
+        weedFactor = 0,
+        stoneLevel = 0,
+        sprayLevel = 0,
+        sprayType = 0,
+        limeLevel = 0,
+        rollerLevel = 0,
+        plowLevel = 0,
+        stubbleShredLevel = 0,
+        waterLevel = 0,
+    }
+
+    local function addSample(x, z)
+        local state = FieldState.new()
+        local ok, err = pcall(function() state:update(x, z) end)
+        if not ok then
+            self:logError("FieldState.update", err)
+            return
+        end
+        if not state.isValid then return end
+
+        local status, fruitType = self:classifyFieldState(state)
+        if status == "INVALID" then return end
+
+        totalSamples = totalSamples + 1
+        statusCounts[status] = (statusCounts[status] or 0) + 1
+        groundCounts[state.groundType] = (groundCounts[state.groundType] or 0) + 1
+
+        -- Frucht nur aus Bereichen übernehmen, die nicht bereits bearbeitet oder leer sind.
+        -- So bleibt auf einem vollständig gepflügten Feld keine alte Kultur hängen.
+        if fruitType ~= nil and status ~= "TILLED" and status ~= "FALLOW" then
+            local fruitIdx = fruitType.index or state.fruitTypeIndex
+            if fruitIdx ~= nil then
+                fruitCounts[fruitIdx] = (fruitCounts[fruitIdx] or 0) + 1
+                fruitDescs[fruitIdx] = fruitType
+                growthCountsByFruit[fruitIdx] = growthCountsByFruit[fruitIdx] or {}
+                local growthState = state.growthState or 0
+                growthCountsByFruit[fruitIdx][growthState] = (growthCountsByFruit[fruitIdx][growthState] or 0) + 1
+            end
+        end
+
+        sums.weedState = sums.weedState + (state.weedState or 0)
+        sums.weedFactor = sums.weedFactor + (state.weedFactor or 0)
+        sums.stoneLevel = sums.stoneLevel + (state.stoneLevel or 0)
+        sums.sprayLevel = sums.sprayLevel + (state.sprayLevel or 0)
+        sums.sprayType = sums.sprayType + (state.sprayType or 0)
+        sums.limeLevel = sums.limeLevel + (state.limeLevel or 0)
+        sums.rollerLevel = sums.rollerLevel + (state.rollerLevel or 0)
+        sums.plowLevel = sums.plowLevel + (state.plowLevel or 0)
+        sums.stubbleShredLevel = sums.stubbleShredLevel + (state.stubbleShredLevel or 0)
+        sums.waterLevel = sums.waterLevel + (state.waterLevel or 0)
+    end
+
+    if #polygon >= 3 then
+        local minX, maxX = math.huge, -math.huge
+        local minZ, maxZ = math.huge, -math.huge
+        for _, point in ipairs(polygon) do
+            minX = math.min(minX, point.x)
+            maxX = math.max(maxX, point.x)
+            minZ = math.min(minZ, point.z)
+            maxZ = math.max(maxZ, point.z)
+        end
+
+        local spanX = math.max(1, maxX - minX)
+        local spanZ = math.max(1, maxZ - minZ)
+        local aspect = spanX / spanZ
+        local columns = math.ceil(math.sqrt(self.FIELD_SAMPLE_TARGET * aspect))
+        columns = math.max(4, math.min(12, columns))
+        local rows = math.ceil(self.FIELD_SAMPLE_TARGET / columns)
+        rows = math.max(4, math.min(12, rows))
+
+        for row = 1, rows do
+            local z = minZ + (row - 0.5) / rows * spanZ
+            for column = 1, columns do
+                local x = minX + (column - 0.5) / columns * spanX
+                if self:pointInPolygon(x, z, polygon) then
+                    addSample(x, z)
+                end
+            end
+        end
+    end
+
+    -- Sehr kleine/ungewöhnliche Feldpolygone: als Fallback exakt an der Feldmitte
+    -- abfragen. Das ist immer noch ein aktueller FieldState.update()-Messpunkt und
+    -- nicht der alte, feldweit gecachte field:getFieldState()-Wert.
+    if totalSamples == 0 then
+        local ok, x, z = pcall(function() return field:getCenterOfFieldWorldPosition() end)
+        if ok and x ~= nil and z ~= nil then addSample(x, z) end
+    end
+
+    local result = {
+        sampleCount = totalSamples,
+        fieldStatus = "FALLOW",
+        statusPercentages = {
+            ready = 0,
+            growing = 0,
+            harvested = 0,
+            tilled = 0,
+            withered = 0,
+            fallow = 0,
+        },
+        harvestReady = false,
+        isWithered = false,
+        fruitType = "NONE",
+        fruitTitle = "Brache",
+        fruitDesc = nil,
+        growthState = 0,
+        maxGrowthState = 0,
+        growthName = "FALLOW",
+        groundType = "NONE",
+        weedState = 0,
+        weedFactor = 0,
+        stoneLevel = 0,
+        sprayLevel = 0,
+        sprayType = 0,
+        limeLevel = 0,
+        rollerLevel = 0,
+        plowLevel = 0,
+        stubbleShredLevel = 0,
+        waterLevel = 0,
+    }
+
+    if totalSamples == 0 then return result end
+
+    local function pct(status)
+        return self:round((statusCounts[status] or 0) / totalSamples * 100, 1)
+    end
+
+    result.statusPercentages.ready = pct("READY")
+    result.statusPercentages.growing = pct("GROWING")
+    result.statusPercentages.harvested = pct("HARVESTED")
+    result.statusPercentages.tilled = pct("TILLED")
+    result.statusPercentages.withered = pct("WITHERED")
+    result.statusPercentages.fallow = pct("FALLOW")
+
+    local dominantStatus, dominantStatusCount = self:getDominantKey(statusCounts)
+    local dominantShare = dominantStatusCount / totalSamples
+    local significantStates = 0
+    for _, count in pairs(statusCounts) do
+        if count / totalSamples >= 0.08 then significantStates = significantStates + 1 end
+    end
+
+    if dominantStatus ~= nil then
+        if significantStates > 1 and dominantShare < 0.85 then
+            result.fieldStatus = "MIXED"
+        else
+            result.fieldStatus = dominantStatus
+        end
+    end
+
+    result.harvestReady = result.statusPercentages.ready >= 50
+    result.isWithered = result.fieldStatus == "WITHERED"
+
+    local dominantGround = self:getDominantKey(groundCounts)
+    if dominantGround ~= nil then
+        result.groundType = self:getGroundTypeName(dominantGround)
+    end
+
+    -- Für die bestehende PHP-Schnittstelle weiterhin einen plausiblen groundType
+    -- liefern. fieldStatus bleibt zusätzlich als neue, eindeutige Quelle erhalten.
+    if result.fieldStatus == "READY" then
+        result.groundType = "HARVEST_READY"
+    elseif result.fieldStatus == "GROWING" then
+        if dominantGround == nil or not self:isGrowingGroundType(dominantGround) then
+            result.groundType = "SOWN"
+        end
+    elseif result.fieldStatus == "TILLED" and (dominantGround == nil or not self:isWorkedGroundType(dominantGround)) then
+        result.groundType = "CULTIVATED"
+    elseif result.fieldStatus == "HARVESTED" then
+        result.groundType = "GRASS_CUT"
+    elseif result.fieldStatus == "MIXED" then
+        -- Mischfelder dürfen niemals allein wegen eines verbliebenen erntereifen
+        -- Teilbereichs als komplett erntereif erscheinen.
+        result.harvestReady = false
+        if dominantGround == nil or not self:isWorkedGroundType(dominantGround) then
+            result.groundType = "CULTIVATED"
+        end
+    end
+
+    local dominantFruitIdx = self:getDominantKey(fruitCounts)
+    if dominantFruitIdx ~= nil then
+        local fruitType = fruitDescs[dominantFruitIdx]
+        if fruitType ~= nil then
+            result.fruitDesc = fruitType
+            result.fruitType = string.upper(fruitType.name or "UNKNOWN")
+            result.fruitTitle = (fruitType.fillType and fruitType.fillType.title) or fruitType.name or result.fruitType
+            result.maxGrowthState = fruitType.maxHarvestingGrowthState or fruitType.numGrowthStates or 0
+
+            local growthCounts = growthCountsByFruit[dominantFruitIdx] or {}
+            local dominantGrowthState = self:getDominantKey(growthCounts)
+            result.growthState = dominantGrowthState or 0
+        end
+    end
+
+    if result.fieldStatus == "READY" then
+        result.growthName = "READY_TO_HARVEST"
+    elseif result.fieldStatus == "GROWING" then
+        result.growthName = "GROWING"
+    elseif result.fieldStatus == "HARVESTED" then
+        result.growthName = "CUT"
+    elseif result.fieldStatus == "WITHERED" then
+        result.growthName = "WITHERED"
+    elseif result.fieldStatus == "MIXED" then
+        result.growthName = "MIXED"
+    elseif result.fieldStatus == "TILLED" then
+        result.growthName = "TILLED"
+    else
+        result.growthName = "FALLOW"
+    end
+
+    local divisor = totalSamples
+    result.weedState = self:round(sums.weedState / divisor, 0)
+    result.weedFactor = self:round(sums.weedFactor / divisor, 3)
+    result.stoneLevel = self:round(sums.stoneLevel / divisor, 0)
+    result.sprayLevel = self:round(sums.sprayLevel / divisor, 0)
+    result.sprayType = self:round(sums.sprayType / divisor, 0)
+    result.limeLevel = self:round(sums.limeLevel / divisor, 0)
+    result.rollerLevel = self:round(sums.rollerLevel / divisor, 0)
+    result.plowLevel = self:round(sums.plowLevel / divisor, 0)
+    result.stubbleShredLevel = self:round(sums.stubbleShredLevel / divisor, 0)
+    result.waterLevel = self:round(sums.waterLevel / divisor, 0)
+
+    return result
+end
+
 -- ======================================================================
 -- LIFECYCLE
 -- ======================================================================
@@ -83,8 +418,19 @@ function AutoDriveFlurkarteLive:loadMap(filename)
 
     self.GROUND_TYPE_NAMES = {}
     if FieldGroundType ~= nil then
+        local knownGroundTypes = {
+            "NONE", "PLOWED", "CULTIVATED", "SEEDBED", "ROLLED_SEEDBED",
+            "ROLLER_LINES", "STUBBLE_TILLAGE", "RIDGE", "GRASS_CUT",
+            "SOWN", "DIRECT_SOWN", "RIDGE_SOWN", "PLANTED", "GRASS",
+            "HARVEST_READY", "HARVEST_READY_OTHER",
+        }
+        for _, name in ipairs(knownGroundTypes) do
+            local value = FieldGroundType[name]
+            if type(value) == "number" then self.GROUND_TYPE_NAMES[value] = name end
+        end
+        -- Unbekannte/neue GIANTS-Typen zusätzlich aufnehmen.
         for name, value in pairs(FieldGroundType) do
-            if type(value) == "number" then
+            if type(name) == "string" and type(value) == "number" and self.GROUND_TYPE_NAMES[value] == nil then
                 self.GROUND_TYPE_NAMES[value] = name
             end
         end
@@ -199,10 +545,11 @@ end
 -- ======================================================================
 -- FELDDATEN
 --
--- Autoritative Quelle ist Field:getFieldState(). GIANTS verwendet FieldState selbst
--- für Feldmissionen und stellt darüber Frucht, Wachstum, Boden- und Pflegestatus bereit.
--- Keine Ein-Punkt-Abfrage in der Feldmitte mehr: ein einzelner Density-Map-Pixel darf
--- nicht den Zustand eines kompletten Feldes bestimmen.
+-- WICHTIG: field:getFieldState() liefert nur einen zusammengefassten Feldzustand.
+-- Das ist für laufende Feldarbeit (teilweise geerntet/gepflügt) nicht ausreichend.
+-- Wir lesen deshalb mehrere aktuelle FieldState.update(x,z)-Messpunkte innerhalb
+-- des echten Feldpolygons und bilden daraus einen belastbaren Feldzustand.
+-- GIANTS nutzt FieldState.update(x,z) selbst für die positionsgenaue Feldanalyse.
 -- ======================================================================
 
 function AutoDriveFlurkarteLive:collectFields()
@@ -233,110 +580,35 @@ end
 
 function AutoDriveFlurkarteLive:processFarmland(farmland, myFarmId)
     local field = farmland.field
-    local data = {
+    local sampled = self:sampleField(field)
+
+    return {
         id                = field:getId() or 0,
         farmlandId        = farmland.id or 0,
         farmId            = myFarmId,
         area              = self:round(field.areaHa or 0, 2),
-        fruitType         = "NONE",
-        fruitTitle        = "Brache",
-        maxGrowthState    = 0,
-        growthState       = 0,
-        growthName        = "FALLOW",
-        harvestReady      = false,
-        isWithered        = false,
-        groundType        = "NONE",
-        weedState         = 0,
-        weedFactor        = 0,
-        stoneLevel        = 0,
-        sprayLevel        = 0,
-        sprayType         = 0,
-        limeLevel         = 0,
-        rollerLevel       = 0,
-        plowLevel         = 0,
-        stubbleShredLevel = 0,
-        waterLevel        = 0,
+        sampleCount       = sampled.sampleCount,
+        fieldStatus       = sampled.fieldStatus,
+        statusPercentages = sampled.statusPercentages,
+        fruitType         = sampled.fruitType,
+        fruitTitle        = sampled.fruitTitle,
+        maxGrowthState    = sampled.maxGrowthState,
+        growthState       = sampled.growthState,
+        growthName        = sampled.growthName,
+        harvestReady      = sampled.harvestReady,
+        isWithered        = sampled.isWithered,
+        groundType        = sampled.groundType,
+        weedState         = sampled.weedState,
+        weedFactor        = sampled.weedFactor,
+        stoneLevel        = sampled.stoneLevel,
+        sprayLevel        = sampled.sprayLevel,
+        sprayType         = sampled.sprayType,
+        limeLevel         = sampled.limeLevel,
+        rollerLevel       = sampled.rollerLevel,
+        plowLevel         = sampled.plowLevel,
+        stubbleShredLevel = sampled.stubbleShredLevel,
+        waterLevel        = sampled.waterLevel,
     }
-
-    local fieldState = field:getFieldState()
-    if fieldState == nil or not fieldState.isValid then
-        return data
-    end
-
-    data.groundType        = self.GROUND_TYPE_NAMES[fieldState.groundType] or tostring(fieldState.groundType or 0)
-    data.weedState         = fieldState.weedState or 0
-    data.weedFactor        = fieldState.weedFactor or 0
-    data.stoneLevel        = fieldState.stoneLevel or 0
-    data.sprayLevel        = fieldState.sprayLevel or 0
-    data.sprayType         = fieldState.sprayType or 0
-    data.limeLevel         = fieldState.limeLevel or 0
-    data.rollerLevel       = fieldState.rollerLevel or 0
-    data.plowLevel         = fieldState.plowLevel or 0
-    data.stubbleShredLevel = fieldState.stubbleShredLevel or 0
-    data.waterLevel        = fieldState.waterLevel or 0
-
-    local fruitIdx = fieldState.fruitTypeIndex
-    local unknownFruit = FruitType ~= nil and FruitType.UNKNOWN or 0
-    if fruitIdx == nil or fruitIdx == unknownFruit or fruitIdx == 0 then
-        return data
-    end
-
-    local fruitType = g_fruitTypeManager and g_fruitTypeManager:getFruitTypeByIndex(fruitIdx) or nil
-    if fruitType == nil then
-        data.fruitType = "UNKNOWN"
-        data.fruitTitle = "Unbekannt"
-        return data
-    end
-
-    local growthState = fieldState.growthState or 0
-    data.fruitType = string.upper(fruitType.name or "UNKNOWN")
-    data.fruitTitle = (fruitType.fillType and fruitType.fillType.title) or fruitType.name or data.fruitType
-    data.growthState = growthState
-    data.maxGrowthState = fruitType.maxHarvestingGrowthState or fruitType.numGrowthStates or 0
-
-    -- GIANTS nutzt diese beiden Methoden selbst, z. B. in PlowMission.isAvailableForField().
-    local isCut = fruitType.getIsCut ~= nil and fruitType:getIsCut(growthState) or false
-    local isWithered = fruitType.getIsWithered ~= nil and fruitType:getIsWithered(growthState) or false
-
-    if isCut then
-        data.growthName = "CUT"
-        data.harvestReady = false
-    elseif isWithered then
-        data.growthName = "WITHERED"
-        data.isWithered = true
-        data.harvestReady = false
-    else
-        local minHarvest = fruitType.minHarvestingGrowthState or -1
-        local maxHarvest = fruitType.maxHarvestingGrowthState or -1
-
-        if minHarvest >= 0 and maxHarvest >= 0
-            and growthState >= minHarvest and growthState <= maxHarvest then
-            data.growthName = "READY_TO_HARVEST"
-            data.harvestReady = true
-        elseif growthState > 0 then
-            data.growthName = "GROWING"
-        else
-            data.growthName = "GERMINATING"
-        end
-    end
-
-    -- Sicherheitsregel: Ein bereits bearbeiteter Boden darf niemals als erntereif
-    -- ausgegeben werden, selbst wenn ein Mod-Feld einen veralteten Fruchtzustand meldet.
-    local workedGround = data.groundType == "PLOWED"
-        or data.groundType == "CULTIVATED"
-        or data.groundType == "SEEDBED"
-        or data.groundType == "ROLLED_SEEDBED"
-        or data.groundType == "ROLLER_LINES"
-        or data.groundType == "STUBBLE_TILLAGE"
-        or data.groundType == "RIDGE"
-        or data.groundType == "GRASS_CUT"
-
-    if workedGround and data.harvestReady then
-        data.harvestReady = false
-        data.growthName = "CUT"
-    end
-
-    return data
 end
 
 -- ======================================================================
@@ -399,14 +671,10 @@ function AutoDriveFlurkarteLive:processVehicle(vehicle)
         if value ~= nil then data.uniqueId = tostring(value) end
     end
 
-    -- Washable registriert getDirtAmount() direkt auf dem Fahrzeugtyp.
     if vehicle.getDirtAmount ~= nil then
         data.dirt = self:round(vehicle:getDirtAmount() or 0, 3)
     end
 
-    -- FillUnit direkt über die offiziell registrierten Fahrzeugfunktionen auslesen.
-    -- getFillLevelInformation() erwartet ein HUD-Displayobjekt und ist für diesen Export
-    -- nicht die passende API.
     if vehicle.getFillUnits ~= nil then
         for fillUnitIndex, _ in ipairs(vehicle:getFillUnits()) do
             local fillTypeIndex = vehicle:getFillUnitFillType(fillUnitIndex)
@@ -710,8 +978,6 @@ function AutoDriveFlurkarteLive:collectMarket()
 
     local economyManager = g_currentMission and g_currentMission.economyManager
 
-    -- Keine willkürliche Preisobergrenze: auch hochwertige Produktionsgüter müssen
-    -- im Markt-Tab ankommen.
     for _, fillType in pairs(g_fillTypeManager.fillTypes or {}) do
         if fillType ~= nil and fillType.pricePerLiter ~= nil and fillType.pricePerLiter > 0 then
             local basePrice = fillType.pricePerLiter * 1000
@@ -755,8 +1021,6 @@ function AutoDriveFlurkarteLive:writeFile(content)
     createFolder(modSettingsDir)
     createFolder(modDir)
 
-    -- GIANTS stellt in der Lua-Sandbox nicht die vollständige os-Bibliothek bereit.
-    -- Deshalb direkt in die Zieldatei schreiben statt os.remove/os.rename zu verwenden.
     local file, openError = io.open(targetPath, "w")
     if file == nil then
         self:logError("writeFile", openError or "Datei konnte nicht geöffnet werden")
