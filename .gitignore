@@ -1,0 +1,16 @@
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Temporary / backup files
+*.tmp
+*.bak
+*.backup
+*~
+
+# Built mod archives
+*.zip
