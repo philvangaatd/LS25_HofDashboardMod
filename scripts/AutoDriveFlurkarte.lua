@@ -751,33 +751,25 @@ function AutoDriveFlurkarteLive:writeFile(content)
     local modSettingsDir = base .. "modSettings/"
     local modDir = modSettingsDir .. self.SETTINGS_DIR .. "/"
     local targetPath = modDir .. self.OUTPUT_FILE
-    local tempPath = targetPath .. ".tmp"
 
     createFolder(modSettingsDir)
     createFolder(modDir)
 
-    -- Erst vollständig in eine temporäre Datei schreiben. So kann PHP niemals eine
-    -- halb geschriebene JSON-Datei lesen.
-    local file, openError = io.open(tempPath, "w")
+    -- GIANTS stellt in der Lua-Sandbox nicht die vollständige os-Bibliothek bereit.
+    -- Deshalb direkt in die Zieldatei schreiben statt os.remove/os.rename zu verwenden.
+    local file, openError = io.open(targetPath, "w")
     if file == nil then
-        self:logError("writeFile", openError or "Temporäre Datei konnte nicht geöffnet werden")
+        self:logError("writeFile", openError or "Datei konnte nicht geöffnet werden")
         return
     end
 
-    local ok, writeError = file:write(content)
-    file:close()
+    local ok, writeError = pcall(function()
+        file:write(content)
+    end)
+    pcall(function() file:close() end)
+
     if not ok then
         self:logError("writeFile", writeError or "Schreiben fehlgeschlagen")
-        os.remove(tempPath)
-        return
-    end
-
-    -- Windows überschreibt beim Rename eine existierende Datei nicht zuverlässig.
-    -- Die Zieldatei wird deshalb erst nach erfolgreichem Temp-Write ersetzt.
-    os.remove(targetPath)
-    local renamed, renameError = os.rename(tempPath, targetPath)
-    if not renamed then
-        self:logError("writeFile rename", renameError or "Umbenennen fehlgeschlagen")
     end
 end
 
