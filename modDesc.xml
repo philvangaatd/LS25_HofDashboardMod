@@ -1,20 +1,21 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
-    <author>AutoDrive Flurkarte</author>
-    <version>4.5.1.0</version>
+    <author>LS25 Hof-Dashboard</author>
+    <version>5.0.0.0</version>
     <title>
-        <en>AutoDrive Flurkarte - Live Export</en>
-        <de>AutoDrive Flurkarte - Live Export</de>
+        <en>LS25 Hof-Dashboard - Live Connector</en>
+        <de>LS25 Hof-Dashboard - Live Connector</de>
     </title>
     <description>
-        <en>Exports live farm data every 15 seconds for the AutoDrive Flurkarte web dashboard.
-Writes to: modSettings/AutoDriveFlurkarte/liveData.json</en>
-        <de>Exportiert alle 15 Sekunden Live-Farmdaten für das AutoDrive Flurkarte Web-Dashboard.
-Schreibt nach: modSettings/AutoDriveFlurkarte/liveData.json</de>
+        <en>Provides live Farming Simulator 25 data for the LS25 Hof-Dashboard.
+Writes to: modSettings/LS25HofDashboard/liveData.json</en>
+        <de>Liefert Live-Daten aus Farming Simulator 25 für das LS25 Hof-Dashboard.
+Schreibt nach: modSettings/LS25HofDashboard/liveData.json</de>
     </description>
     <multiplayer supported="false"/>
     <extraSourceFiles>
-        <sourceFile filename="scripts/AutoDriveFlurkarte.lua"/>
+        <sourceFile filename="scripts/HofDashboard.lua"/>
+        <sourceFile filename="scripts/HofDashboardIdentity.lua"/>
         <sourceFile filename="scripts/PlaceableRegistryAdapter.lua"/>
     </extraSourceFiles>
 </modDesc>

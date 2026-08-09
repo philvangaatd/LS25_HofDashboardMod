@@ -2,16 +2,16 @@
     FS25 Placeable Registry Adapter
     ===============================
     FS25 verwaltet geladene Placeables in g_currentMission.placeableSystem.placeables.
-    Die bestehenden Collector aus AutoDriveFlurkarte.lua greifen aus historischen
+    Die bestehenden Collector aus HofDashboard.lua greifen aus historischen
     Gruenden auf g_currentMission.placeables zu. Dieser Adapter stellt waehrend der
     beiden betroffenen Collector-Aufrufe kontrolliert die kanonische Registry bereit,
     ohne deren Tier-/Produktionslogik zu duplizieren.
 ]]
 
-local live = AutoDriveFlurkarteLive
+local live = HofDashboardLive
 
 if live == nil then
-    print("[FS25_AutoDriveFlurkarte] PlaceableRegistryAdapter: Kernmodul nicht geladen")
+    print("[FS25_HofDashboard] PlaceableRegistryAdapter: Kernmodul nicht geladen")
     return
 end
 
@@ -76,5 +76,4 @@ if originalCollectProductions ~= nil then
     end
 end
 
--- ModDesc und JSON-Vertrag bekommen dieselbe Patch-Version.
-live.VERSION = "4.5.1"
+live.VERSION = "5.0.0"
