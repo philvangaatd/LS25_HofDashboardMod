@@ -11,10 +11,17 @@
 
 local MODNAME = g_currentModName or "FS25_HofDashboard"
 local JSON_ARRAY_MT = { __jsonArray = true }
+local RELEASE = HofDashboardRelease
+
+if RELEASE == nil then
+    error("[FS25_HofDashboard] scripts/Version.lua wurde nicht vor dem Kernmodul geladen")
+end
 
 HofDashboardLive                 = {}
 HofDashboardLive.MOD_NAME        = MODNAME
-HofDashboardLive.VERSION         = "5.0.0"
+HofDashboardLive.VERSION         = RELEASE.MOD_VERSION
+HofDashboardLive.PROTOCOL_VERSION = RELEASE.PROTOCOL_VERSION
+HofDashboardLive.MIN_DASHBOARD_VERSION = RELEASE.MIN_DASHBOARD_VERSION
 HofDashboardLive.SETTINGS_DIR    = "LS25HofDashboard"
 HofDashboardLive.OUTPUT_FILE     = "liveData.json"
 HofDashboardLive.UPDATE_INTERVAL = 15000
@@ -495,6 +502,8 @@ function HofDashboardLive:exportAllData()
     local vehicles = self:collectVehicles()
     local data = {
         version       = self.VERSION,
+        protocolVersion = self.PROTOCOL_VERSION,
+        minimumDashboardVersion = self.MIN_DASHBOARD_VERSION,
         modName       = self.MOD_NAME,
         timestamp     = getDate("%Y-%m-%dT%H:%M:%S"),
         mapName       = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),

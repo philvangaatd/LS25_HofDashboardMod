@@ -75,5 +75,3 @@ if originalCollectProductions ~= nil then
         return result
     end
 end
-
-live.VERSION = "5.0.0"

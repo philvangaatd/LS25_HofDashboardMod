@@ -240,10 +240,17 @@ Es werden keine Daten über das Netzwerk übertragen.
 LS25_HofDashboardMod/
 ├─ modDesc.xml
 ├─ scripts/
+│  ├─ Version.lua
 │  ├─ HofDashboard.lua
 │  └─ PlaceableRegistryAdapter.lua
 └─ README.md
 ```
+
+### `Version.lua`
+
+Enthält die zentrale Mod-Version, die Datenprotokoll-Version und die mindestens
+benötigte Dashboard-Version. `modDesc.xml` behält zusätzlich die von GIANTS
+verlangte vierteilige Versionsangabe.
 
 ### `HofDashboard.lua`
 
@@ -258,6 +265,8 @@ Stellt Tier- und Produktions-Collector die kanonische FS25-Placeable-Registry zu
 ```json
 {
   "version": "5.0.0",
+  "protocolVersion": 1,
+  "minimumDashboardVersion": "5.0.0",
   "modName": "FS25_HofDashboard",
   "timestamp": "2026-08-09T03:00:00",
   "farm": {},

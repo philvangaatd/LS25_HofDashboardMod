@@ -1,0 +1,99 @@
+name: Validate live connector
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.1 compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1
+
+      - name: Validate Lua syntax
+        run: |
+          luac5.1 -p scripts/Version.lua
+          luac5.1 -p scripts/HofDashboard.lua
+          luac5.1 -p scripts/PlaceableRegistryAdapter.lua
+
+      - name: Validate mod descriptor and load order
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("modDesc.xml").getroot()
+          version = root.findtext("version")
+          sources = [
+              node.attrib["filename"]
+              for node in root.findall("./extraSourceFiles/sourceFile")
+          ]
+
+          if version != "5.0.0.0":
+              raise SystemExit(f"Unexpected modDesc version: {version}")
+          if sources[:2] != ["scripts/Version.lua", "scripts/HofDashboard.lua"]:
+              raise SystemExit(f"Unexpected source load order: {sources}")
+          PY
+
+      - name: Validate compatibility contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          release = Path("scripts/Version.lua").read_text(encoding="utf-8")
+          core = Path("scripts/HofDashboard.lua").read_text(encoding="utf-8")
+          adapter = Path("scripts/PlaceableRegistryAdapter.lua").read_text(encoding="utf-8")
+
+          required_release_tokens = [
+              'MOD_VERSION = "5.0.0"',
+              "PROTOCOL_VERSION = 1",
+              'MIN_DASHBOARD_VERSION = "5.0.0"',
+          ]
+          required_export_tokens = [
+              "version       = self.VERSION",
+              "protocolVersion = self.PROTOCOL_VERSION",
+              "minimumDashboardVersion = self.MIN_DASHBOARD_VERSION",
+          ]
+
+          for token in required_release_tokens:
+              if token not in release:
+                  raise SystemExit(f"Missing release token: {token}")
+          for token in required_export_tokens:
+              if token not in core:
+                  raise SystemExit(f"Missing export token: {token}")
+          if 'live.VERSION = ' in adapter:
+              raise SystemExit("Placeable adapter must not override the centralized version")
+          PY
+
+      - name: Assemble FS25 test package
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p dist/scripts
+          cp modDesc.xml dist/modDesc.xml
+          cp scripts/*.lua dist/scripts/
+          test -f dist/modDesc.xml
+          test -f dist/scripts/Version.lua
+          test -f dist/scripts/HofDashboard.lua
+          test -f dist/scripts/PlaceableRegistryAdapter.lua
+          test ! -e dist/.github
+
+      - name: Upload FS25 test package
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FS25_HofDashboard-test
+          path: |
+            dist/modDesc.xml
+            dist/scripts/
+          if-no-files-found: error
+          retention-days: 14
