@@ -74,3 +74,26 @@ jobs:
           if 'live.VERSION = ' in adapter:
               raise SystemExit("Placeable adapter must not override the centralized version")
           PY
+
+      - name: Assemble FS25 test package
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p dist/scripts
+          cp modDesc.xml dist/modDesc.xml
+          cp scripts/*.lua dist/scripts/
+          test -f dist/modDesc.xml
+          test -f dist/scripts/Version.lua
+          test -f dist/scripts/HofDashboard.lua
+          test -f dist/scripts/PlaceableRegistryAdapter.lua
+          test ! -e dist/.github
+
+      - name: Upload FS25 test package
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FS25_HofDashboard-test
+          path: |
+            dist/modDesc.xml
+            dist/scripts/
+          if-no-files-found: error
+          retention-days: 14
