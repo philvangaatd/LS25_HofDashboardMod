@@ -241,22 +241,13 @@ LS25_HofDashboardMod/
 ├─ modDesc.xml
 ├─ scripts/
 │  ├─ HofDashboard.lua
-│  ├─ HofDashboardIdentity.lua
 │  └─ PlaceableRegistryAdapter.lua
 └─ README.md
 ```
 
 ### `HofDashboard.lua`
 
-Enthält die Collector, JSON-Erzeugung und den zyklischen Export. Während der v5-Migration enthält die Datei intern noch den historischen Klassennamen; dieser wird in einem separaten Cleanup-Schritt vollständig auf `HofDashboardLive` umgestellt.
-
-### `HofDashboardIdentity.lua`
-
-Stellt während der Migration bereits die neue externe Identität bereit:
-
-- `FS25_HofDashboard`
-- Version `5.0.0`
-- `LS25HofDashboard` als Settings-Verzeichnis
+Enthält die zentrale Klasse `HofDashboardLive`, alle Collector, die JSON-Erzeugung und den zyklischen 15-Sekunden-Export.
 
 ### `PlaceableRegistryAdapter.lua`
 

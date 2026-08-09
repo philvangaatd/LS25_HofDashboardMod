@@ -15,7 +15,6 @@ Schreibt nach: modSettings/LS25HofDashboard/liveData.json</de>
     <multiplayer supported="false"/>
     <extraSourceFiles>
         <sourceFile filename="scripts/HofDashboard.lua"/>
-        <sourceFile filename="scripts/HofDashboardIdentity.lua"/>
         <sourceFile filename="scripts/PlaceableRegistryAdapter.lua"/>
     </extraSourceFiles>
 </modDesc>

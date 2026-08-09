@@ -1,48 +1,48 @@
 --[[
-    FS25_AutoDriveFlurkarte – Live Data Export v4.5
+    LS25 Hof-Dashboard – Live Connector v5.0
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
-      <UserDocuments>/My Games/FarmingSimulator2025/modSettings/AutoDriveFlurkarte/liveData.json
+      <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
 
     Datenfluss: FS25 Lua API -> liveData.json -> PHP API -> Frontend.
     Der Lua-Mod ist die autoritative Quelle für alle Live-Zustände.
     API-Referenz: https://gdn.giants-software.com/documentation_scripting_fs25.php
 ]]
 
-local MODNAME = g_currentModName or "FS25_AutoDriveFlurkarte"
+local MODNAME = g_currentModName or "FS25_HofDashboard"
 local JSON_ARRAY_MT = { __jsonArray = true }
 
-AutoDriveFlurkarteLive                 = {}
-AutoDriveFlurkarteLive.MOD_NAME        = MODNAME
-AutoDriveFlurkarteLive.VERSION         = "4.5.0"
-AutoDriveFlurkarteLive.SETTINGS_DIR    = "AutoDriveFlurkarte"
-AutoDriveFlurkarteLive.OUTPUT_FILE     = "liveData.json"
-AutoDriveFlurkarteLive.UPDATE_INTERVAL = 15000
-AutoDriveFlurkarteLive.FIELD_SAMPLE_TARGET = 81
-AutoDriveFlurkarteLive.timer           = 0
-AutoDriveFlurkarteLive.isReady         = false
-AutoDriveFlurkarteLive.FUEL_TYPES      = nil
-AutoDriveFlurkarteLive.FUEL_BY_INDEX   = nil
-AutoDriveFlurkarteLive.GROUND_TYPE_NAMES = {}
+HofDashboardLive                 = {}
+HofDashboardLive.MOD_NAME        = MODNAME
+HofDashboardLive.VERSION         = "5.0.0"
+HofDashboardLive.SETTINGS_DIR    = "LS25HofDashboard"
+HofDashboardLive.OUTPUT_FILE     = "liveData.json"
+HofDashboardLive.UPDATE_INTERVAL = 15000
+HofDashboardLive.FIELD_SAMPLE_TARGET = 81
+HofDashboardLive.timer           = 0
+HofDashboardLive.isReady         = false
+HofDashboardLive.FUEL_TYPES      = nil
+HofDashboardLive.FUEL_BY_INDEX   = nil
+HofDashboardLive.GROUND_TYPE_NAMES = {}
 
 -- ======================================================================
 -- HILFSFUNKTIONEN
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:newArray()
+function HofDashboardLive:newArray()
     return setmetatable({}, JSON_ARRAY_MT)
 end
 
-function AutoDriveFlurkarteLive:round(value, digits)
+function HofDashboardLive:round(value, digits)
     local factor = 10 ^ (digits or 0)
     return math.floor((value or 0) * factor + 0.5) / factor
 end
 
-function AutoDriveFlurkarteLive:logError(scope, err)
+function HofDashboardLive:logError(scope, err)
     print(string.format("[%s] %s: %s", self.MOD_NAME, tostring(scope), tostring(err)))
 end
 
-function AutoDriveFlurkarteLive:protected(scope, fn)
+function HofDashboardLive:protected(scope, fn)
     local ok, result = pcall(fn)
     if not ok then
         self:logError(scope, result)
@@ -51,13 +51,13 @@ function AutoDriveFlurkarteLive:protected(scope, fn)
     return true, result
 end
 
-function AutoDriveFlurkarteLive:safeGet(fn, fallback)
+function HofDashboardLive:safeGet(fn, fallback)
     local ok, val = pcall(fn)
     if ok and val ~= nil then return val end
     return fallback
 end
 
-function AutoDriveFlurkarteLive:getPlayerFarmId()
+function HofDashboardLive:getPlayerFarmId()
     if g_currentMission == nil then return 0 end
 
     if g_currentMission.getFarmId ~= nil then
@@ -74,11 +74,11 @@ function AutoDriveFlurkarteLive:getPlayerFarmId()
     return 0
 end
 
-function AutoDriveFlurkarteLive:getGroundTypeName(value)
+function HofDashboardLive:getGroundTypeName(value)
     return self.GROUND_TYPE_NAMES[value] or tostring(value or 0)
 end
 
-function AutoDriveFlurkarteLive:isWorkedGroundType(value)
+function HofDashboardLive:isWorkedGroundType(value)
     if FieldGroundType == nil then return false end
     return value == FieldGroundType.PLOWED
         or value == FieldGroundType.CULTIVATED
@@ -90,7 +90,7 @@ function AutoDriveFlurkarteLive:isWorkedGroundType(value)
         or value == FieldGroundType.GRASS_CUT
 end
 
-function AutoDriveFlurkarteLive:isGrowingGroundType(value)
+function HofDashboardLive:isGrowingGroundType(value)
     if FieldGroundType == nil then return false end
     return value == FieldGroundType.SOWN
         or value == FieldGroundType.DIRECT_SOWN
@@ -99,7 +99,7 @@ function AutoDriveFlurkarteLive:isGrowingGroundType(value)
         or value == FieldGroundType.GRASS
 end
 
-function AutoDriveFlurkarteLive:pointInPolygon(x, z, polygon)
+function HofDashboardLive:pointInPolygon(x, z, polygon)
     local inside = false
     local j = #polygon
 
@@ -115,7 +115,7 @@ function AutoDriveFlurkarteLive:pointInPolygon(x, z, polygon)
     return inside
 end
 
-function AutoDriveFlurkarteLive:getDominantKey(counts)
+function HofDashboardLive:getDominantKey(counts)
     local bestKey = nil
     local bestCount = -1
     for key, count in pairs(counts) do
@@ -127,7 +127,7 @@ function AutoDriveFlurkarteLive:getDominantKey(counts)
     return bestKey, math.max(0, bestCount)
 end
 
-function AutoDriveFlurkarteLive:classifyFieldState(fieldState)
+function HofDashboardLive:classifyFieldState(fieldState)
     if fieldState == nil or not fieldState.isValid then return "INVALID", nil end
 
     -- Frucht- und Bodenzustand sind im FS25 voneinander unabhängige Density-Map-
@@ -179,7 +179,7 @@ function AutoDriveFlurkarteLive:classifyFieldState(fieldState)
     return "FALLOW", nil
 end
 
-function AutoDriveFlurkarteLive:sampleField(field)
+function HofDashboardLive:sampleField(field)
     local polygon = {}
     local polygonNodes = field:getPolygonPoints() or {}
 
@@ -425,7 +425,7 @@ end
 -- LIFECYCLE
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:loadMap(filename)
+function HofDashboardLive:loadMap(filename)
     self.isReady = true
     self.timer = self.UPDATE_INTERVAL
 
@@ -470,11 +470,11 @@ function AutoDriveFlurkarteLive:loadMap(filename)
         self.MOD_NAME, self.VERSION, self.UPDATE_INTERVAL / 1000))
 end
 
-function AutoDriveFlurkarteLive:deleteMap()
+function HofDashboardLive:deleteMap()
     self.isReady = false
 end
 
-function AutoDriveFlurkarteLive:update(dt)
+function HofDashboardLive:update(dt)
     if not self.isReady or g_currentMission == nil then return end
 
     self.timer = self.timer + dt
@@ -491,7 +491,7 @@ end
 -- EXPORT
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:exportAllData()
+function HofDashboardLive:exportAllData()
     local vehicles = self:collectVehicles()
     local data = {
         version       = self.VERSION,
@@ -519,7 +519,7 @@ end
 -- HOF-INFORMATIONEN
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:collectFarm()
+function HofDashboardLive:collectFarm()
     local result = { name = "", farmId = 0, money = 0, loan = 0 }
     local playerFarmId = self:getPlayerFarmId()
     result.farmId = playerFarmId
@@ -569,7 +569,7 @@ end
 -- GIANTS nutzt FieldState.update(x,z) selbst für die positionsgenaue Feldanalyse.
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:collectFields()
+function HofDashboardLive:collectFields()
     local result = self:newArray()
     if g_farmlandManager == nil or g_currentMission == nil then return result end
 
@@ -595,7 +595,7 @@ function AutoDriveFlurkarteLive:collectFields()
     return result
 end
 
-function AutoDriveFlurkarteLive:processFarmland(farmland, myFarmId)
+function HofDashboardLive:processFarmland(farmland, myFarmId)
     local field = farmland.field
     local sampled = self:sampleField(field)
 
@@ -632,7 +632,7 @@ end
 -- FAHRZEUGDATEN
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:collectVehicles()
+function HofDashboardLive:collectVehicles()
     local result = self:newArray()
     local diagnostics = { seen = 0, exported = 0, failed = 0, skipped = 0 }
     self.vehicleDiagnostics = diagnostics
@@ -679,7 +679,7 @@ function AutoDriveFlurkarteLive:collectVehicles()
     return result
 end
 
-function AutoDriveFlurkarteLive:getVehicleOwnerFarmId(vehicle)
+function HofDashboardLive:getVehicleOwnerFarmId(vehicle)
     local ownerId = 0
     if vehicle.getOwnerFarmId ~= nil then
         ownerId = self:safeGet(function() return vehicle:getOwnerFarmId() end, 0) or 0
@@ -688,7 +688,7 @@ function AutoDriveFlurkarteLive:getVehicleOwnerFarmId(vehicle)
     return ownerId
 end
 
-function AutoDriveFlurkarteLive:getVehicleCategory(vehicle)
+function HofDashboardLive:getVehicleCategory(vehicle)
     if vehicle.spec_motorized ~= nil or vehicle.spec_enterable ~= nil or vehicle.spec_drivable ~= nil then
         return "VEHICLE"
     end
@@ -696,7 +696,7 @@ function AutoDriveFlurkarteLive:getVehicleCategory(vehicle)
     return "IMPLEMENT"
 end
 
-function AutoDriveFlurkarteLive:getVehicleStoreInfo(vehicle)
+function HofDashboardLive:getVehicleStoreInfo(vehicle)
     local info = {
         brand = "",
         model = "",
@@ -739,7 +739,7 @@ function AutoDriveFlurkarteLive:getVehicleStoreInfo(vehicle)
     return info
 end
 
-function AutoDriveFlurkarteLive:getFillTypeData(fillTypeIndex)
+function HofDashboardLive:getFillTypeData(fillTypeIndex)
     if fillTypeIndex == nil or FillType == nil or fillTypeIndex == FillType.UNKNOWN then return nil end
     local fillType = g_fillTypeManager and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
     if fillType == nil then return nil end
@@ -758,11 +758,11 @@ function AutoDriveFlurkarteLive:getFillTypeData(fillTypeIndex)
     }
 end
 
-function AutoDriveFlurkarteLive:isIgnoredVehicleFillType(name)
+function HofDashboardLive:isIgnoredVehicleFillType(name)
     return name == "AIR" or name == "BALE_NET" or name == "UNKNOWN"
 end
 
-function AutoDriveFlurkarteLive:processVehicle(vehicle, myFarmId)
+function HofDashboardLive:processVehicle(vehicle, myFarmId)
     if vehicle == nil or vehicle.spec_pallet ~= nil then return nil end
 
     local ownerId = self:getVehicleOwnerFarmId(vehicle)
@@ -898,20 +898,20 @@ end
 -- aus den laufenden Husbandry-Specializations gelesen, nicht aus placeables.xml.
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:normalizeAnimalFactor(value)
+function HofDashboardLive:normalizeAnimalFactor(value)
     value = tonumber(value) or 0
     if value > 1 then value = value / 100 end
     return math.max(0, math.min(1, value))
 end
 
-function AutoDriveFlurkarteLive:getPlaceableOwnerFarmId(placeable)
+function HofDashboardLive:getPlaceableOwnerFarmId(placeable)
     if placeable ~= nil and placeable.getOwnerFarmId ~= nil then
         return self:safeGet(function() return placeable:getOwnerFarmId() end, placeable.ownerFarmId or 0) or 0
     end
     return placeable and (placeable.ownerFarmId or 0) or 0
 end
 
-function AutoDriveFlurkarteLive:getHusbandryFill(placeable, fillTypeIndex)
+function HofDashboardLive:getHusbandryFill(placeable, fillTypeIndex)
     if fillTypeIndex == nil then return 0, 0 end
     local level = 0
     local capacity = 0
@@ -924,7 +924,7 @@ function AutoDriveFlurkarteLive:getHusbandryFill(placeable, fillTypeIndex)
     return math.max(0, level), math.max(0, capacity)
 end
 
-function AutoDriveFlurkarteLive:makeHusbandryFillEntry(placeable, fillTypeIndex, extra)
+function HofDashboardLive:makeHusbandryFillEntry(placeable, fillTypeIndex, extra)
     local fillType = g_fillTypeManager and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
     if fillType == nil then return nil end
     local level, capacity = self:getHusbandryFill(placeable, fillTypeIndex)
@@ -941,7 +941,7 @@ function AutoDriveFlurkarteLive:makeHusbandryFillEntry(placeable, fillTypeIndex,
     return entry
 end
 
-function AutoDriveFlurkarteLive:getAnimalSubTypeTitle(subType)
+function HofDashboardLive:getAnimalSubTypeTitle(subType)
     if subType == nil then return "Unbekannt" end
     if type(subType.title) == "string" and subType.title ~= "" then return subType.title end
 
@@ -958,7 +958,7 @@ function AutoDriveFlurkarteLive:getAnimalSubTypeTitle(subType)
     return tostring(subType.name or "Unbekannt")
 end
 
-function AutoDriveFlurkarteLive:collectAnimals()
+function HofDashboardLive:collectAnimals()
     local result = self:newArray()
     local diagnostics = { seen = 0, exported = 0, failed = 0, skipped = 0 }
     self.animalDiagnostics = diagnostics
@@ -997,7 +997,7 @@ function AutoDriveFlurkarteLive:collectAnimals()
     return result
 end
 
-function AutoDriveFlurkarteLive:processHusbandry(placeable, myFarmId)
+function HofDashboardLive:processHusbandry(placeable, myFarmId)
     local specAnimals = placeable.spec_husbandryAnimals
     if specAnimals == nil then return nil end
 
@@ -1300,7 +1300,7 @@ function AutoDriveFlurkarteLive:processHusbandry(placeable, myFarmId)
     return data
 end
 
-function AutoDriveFlurkarteLive:countOwnedPalletFillType(fillTypeIndex, myFarmId)
+function HofDashboardLive:countOwnedPalletFillType(fillTypeIndex, myFarmId)
     local count = 0
     local liters = 0
     local vehicleSystem = g_currentMission and g_currentMission.vehicleSystem or nil
@@ -1320,7 +1320,7 @@ function AutoDriveFlurkarteLive:countOwnedPalletFillType(fillTypeIndex, myFarmId
     return count, liters
 end
 
-function AutoDriveFlurkarteLive:collectBeehives()
+function HofDashboardLive:collectBeehives()
     local result = {
         hiveCount = 0,
         activeHiveCount = 0,
@@ -1385,7 +1385,7 @@ end
 -- PRODUKTIONSANLAGEN
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:collectProductions()
+function HofDashboardLive:collectProductions()
     local result = self:newArray()
     if g_currentMission == nil or g_currentMission.placeables == nil then return result end
 
@@ -1400,7 +1400,7 @@ function AutoDriveFlurkarteLive:collectProductions()
     return result
 end
 
-function AutoDriveFlurkarteLive:processProduction(placeable)
+function HofDashboardLive:processProduction(placeable)
     local spec = placeable.spec_productionPoint
     if spec == nil or spec.productionPoint == nil then return nil end
 
@@ -1476,7 +1476,7 @@ end
 -- VERTRÄGE / MISSIONS
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:collectContracts()
+function HofDashboardLive:collectContracts()
     local result = self:newArray()
     if g_missionManager == nil then return result end
 
@@ -1499,7 +1499,7 @@ function AutoDriveFlurkarteLive:collectContracts()
     return result
 end
 
-function AutoDriveFlurkarteLive:processMission(mission)
+function HofDashboardLive:processMission(mission)
     if mission == nil then return nil end
 
     local data = {
@@ -1550,7 +1550,7 @@ end
 -- MARKTPREISE
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:getSellingStationName(station)
+function HofDashboardLive:getSellingStationName(station)
     local name = ""
     if station ~= nil and station.getName ~= nil then
         name = self:safeGet(function() return station:getName() end, "") or ""
@@ -1562,7 +1562,7 @@ function AutoDriveFlurkarteLive:getSellingStationName(station)
     return name
 end
 
-function AutoDriveFlurkarteLive:collectMarket()
+function HofDashboardLive:collectMarket()
     local result = self:newArray()
     if g_fillTypeManager == nil or g_currentMission == nil then return result end
 
@@ -1668,7 +1668,7 @@ end
 -- DATEI SCHREIBEN
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:writeFile(content)
+function HofDashboardLive:writeFile(content)
     local base = getUserProfileAppPath()
     local modSettingsDir = base .. "modSettings/"
     local modDir = modSettingsDir .. self.SETTINGS_DIR .. "/"
@@ -1697,7 +1697,7 @@ end
 -- JSON ENCODER
 -- ======================================================================
 
-function AutoDriveFlurkarteLive:jsonEncode(value)
+function HofDashboardLive:jsonEncode(value)
     local valueType = type(value)
 
     if valueType == "nil" then
@@ -1747,4 +1747,4 @@ end
 -- REGISTRIEREN
 -- ======================================================================
 
-addModEventListener(AutoDriveFlurkarteLive)
+addModEventListener(HofDashboardLive)
