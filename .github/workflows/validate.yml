@@ -27,6 +27,9 @@ jobs:
           luac5.1 -p scripts/HofDashboard.lua
           luac5.1 -p scripts/PlaceableRegistryAdapter.lua
 
+      - name: Exercise production export contract
+        run: lua5.1 tests/production_export_test.lua
+
       - name: Validate mod descriptor and load order
         run: |
           python3 - <<'PY'
@@ -39,7 +42,7 @@ jobs:
               for node in root.findall("./extraSourceFiles/sourceFile")
           ]
 
-          if version != "5.0.0.0":
+          if version != "5.0.1.0":
               raise SystemExit(f"Unexpected modDesc version: {version}")
           if sources[:2] != ["scripts/Version.lua", "scripts/HofDashboard.lua"]:
               raise SystemExit(f"Unexpected source load order: {sources}")
@@ -55,9 +58,9 @@ jobs:
           adapter = Path("scripts/PlaceableRegistryAdapter.lua").read_text(encoding="utf-8")
 
           required_release_tokens = [
-              'MOD_VERSION = "5.0.0"',
+              'MOD_VERSION = "5.0.1"',
               "PROTOCOL_VERSION = 1",
-              'MIN_DASHBOARD_VERSION = "5.0.0"',
+              'MIN_DASHBOARD_VERSION = "5.0.1"',
           ]
           required_export_tokens = [
               "version       = self.VERSION",

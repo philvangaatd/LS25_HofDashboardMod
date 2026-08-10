@@ -1,5 +1,5 @@
 --[[
-    LS25 Hof-Dashboard – Live Connector v5.0
+    LS25 Hof-Dashboard – Live Connector v5.0.1
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
@@ -1425,18 +1425,31 @@ function HofDashboardLive:processProduction(placeable)
         storages    = self:newArray(),
     }
 
-    if productionPoint.getProductions ~= nil then
-        for _, production in ipairs(productionPoint:getProductions()) do
+    local activeProductionObjects = {}
+    local activeProductionIds = {}
+    for _, activeProduction in pairs(productionPoint.activeProductions or {}) do
+        activeProductionObjects[activeProduction] = true
+        if activeProduction.id ~= nil then
+            activeProductionIds[tostring(activeProduction.id)] = true
+        end
+    end
+
+    for _, production in pairs(productionPoint.productions or {}) do
+        if type(production) == "table" then
+            local productionId = tostring(production.id or "")
             local productionData = {
+                id            = productionId,
                 name          = production.name or "",
-                status        = tostring(production.status or ""),
+                enabled       = activeProductionObjects[production] == true
+                    or (productionId ~= "" and activeProductionIds[productionId] == true),
+                status        = production.status or 0,
                 cyclesPerHour = production.cyclesPerHour or 0,
                 inputs        = self:newArray(),
                 outputs       = self:newArray(),
             }
 
             if production.inputs ~= nil then
-                for _, input in ipairs(production.inputs) do
+                for _, input in pairs(production.inputs) do
                     local fillType = g_fillTypeManager:getFillTypeByIndex(input.type)
                     table.insert(productionData.inputs, {
                         fillType = fillType and fillType.name or tostring(input.type),
@@ -1446,7 +1459,7 @@ function HofDashboardLive:processProduction(placeable)
             end
 
             if production.outputs ~= nil then
-                for _, output in ipairs(production.outputs) do
+                for _, output in pairs(production.outputs) do
                     local fillType = g_fillTypeManager:getFillTypeByIndex(output.type)
                     table.insert(productionData.outputs, {
                         fillType = fillType and fillType.name or tostring(output.type),
@@ -1458,6 +1471,10 @@ function HofDashboardLive:processProduction(placeable)
             table.insert(data.productions, productionData)
         end
     end
+
+    table.sort(data.productions, function(a, b)
+        return tostring(a.name or a.id or "") < tostring(b.name or b.id or "")
+    end)
 
     if productionPoint.storage ~= nil and productionPoint.storage.fillLevels ~= nil then
         for fillTypeIndex, level in pairs(productionPoint.storage.fillLevels) do
