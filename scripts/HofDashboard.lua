@@ -1434,41 +1434,54 @@ function HofDashboardLive:processProduction(placeable)
         end
     end
 
+    local activeInputFillTypes = {}
+    local activeOutputFillTypes = {}
+
     for _, production in pairs(productionPoint.productions or {}) do
         if type(production) == "table" then
             local productionId = tostring(production.id or "")
-            local productionData = {
-                id            = productionId,
-                name          = production.name or "",
-                enabled       = activeProductionObjects[production] == true
-                    or (productionId ~= "" and activeProductionIds[productionId] == true),
-                status        = production.status or 0,
-                cyclesPerHour = production.cyclesPerHour or 0,
-                inputs        = self:newArray(),
-                outputs       = self:newArray(),
-            }
+            local enabled = activeProductionObjects[production] == true
+                or (productionId ~= "" and activeProductionIds[productionId] == true)
 
-            if production.inputs ~= nil then
-                for _, input in pairs(production.inputs) do
-                    local fillType = g_fillTypeManager:getFillTypeByIndex(input.type)
-                    table.insert(productionData.inputs, {
-                        fillType = fillType and fillType.name or tostring(input.type),
-                        amount   = input.amount or 0,
-                    })
+            if enabled then
+                local productionData = {
+                    id            = productionId,
+                    name          = production.name or "",
+                    enabled       = true,
+                    status        = production.status or 0,
+                    cyclesPerHour = production.cyclesPerHour or 0,
+                    inputs        = self:newArray(),
+                    outputs       = self:newArray(),
+                }
+
+                if production.inputs ~= nil then
+                    for _, input in pairs(production.inputs) do
+                        local fillTypeIndex = input.type
+                        local fillType = fillTypeIndex ~= nil
+                            and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
+                        if fillTypeIndex ~= nil then activeInputFillTypes[fillTypeIndex] = true end
+                        table.insert(productionData.inputs, {
+                            fillType = fillType and fillType.name or tostring(fillTypeIndex),
+                            amount   = input.amount or 0,
+                        })
+                    end
                 end
-            end
 
-            if production.outputs ~= nil then
-                for _, output in pairs(production.outputs) do
-                    local fillType = g_fillTypeManager:getFillTypeByIndex(output.type)
-                    table.insert(productionData.outputs, {
-                        fillType = fillType and fillType.name or tostring(output.type),
-                        amount   = output.amount or 0,
-                    })
+                if production.outputs ~= nil then
+                    for _, output in pairs(production.outputs) do
+                        local fillTypeIndex = output.type
+                        local fillType = fillTypeIndex ~= nil
+                            and g_fillTypeManager:getFillTypeByIndex(fillTypeIndex) or nil
+                        if fillTypeIndex ~= nil then activeOutputFillTypes[fillTypeIndex] = true end
+                        table.insert(productionData.outputs, {
+                            fillType = fillType and fillType.name or tostring(fillTypeIndex),
+                            amount   = output.amount or 0,
+                        })
+                    end
                 end
-            end
 
-            table.insert(data.productions, productionData)
+                table.insert(data.productions, productionData)
+            end
         end
     end
 
@@ -1478,14 +1491,27 @@ function HofDashboardLive:processProduction(placeable)
 
     if productionPoint.storage ~= nil and productionPoint.storage.fillLevels ~= nil then
         for fillTypeIndex, level in pairs(productionPoint.storage.fillLevels) do
-            if level > 0 then
+            local isInput = activeInputFillTypes[fillTypeIndex] == true
+            local isOutput = activeOutputFillTypes[fillTypeIndex] == true
+
+            if isInput or isOutput then
                 local fillType = g_fillTypeManager:getFillTypeByIndex(fillTypeIndex)
-                local capacity = productionPoint.storage.capacities
-                    and productionPoint.storage.capacities[fillTypeIndex] or 0
+                local fallbackCapacity = productionPoint.storage.capacities
+                    and productionPoint.storage.capacities[fillTypeIndex]
+                    or productionPoint.storage.capacity
+                    or 0
+                local capacity = self:safeGet(function()
+                    if productionPoint.storage.getCapacity ~= nil then
+                        return productionPoint.storage:getCapacity(fillTypeIndex)
+                    end
+                    return fallbackCapacity
+                end, fallbackCapacity)
+                local role = isInput and (isOutput and "input_output" or "input") or "output"
 
                 table.insert(data.storages, {
                     fillType = fillType and fillType.name or tostring(fillTypeIndex),
                     title    = fillType and fillType.title or "",
+                    role     = role,
                     level    = math.floor(level),
                     capacity = math.floor(capacity),
                     percent  = capacity > 0 and math.floor(math.min(100, level / capacity * 100)) or 0,
@@ -1494,7 +1520,11 @@ function HofDashboardLive:processProduction(placeable)
         end
     end
 
-    if #data.productions == 0 and #data.storages == 0 then return nil end
+    table.sort(data.storages, function(a, b)
+        return tostring(a.title or a.fillType or "") < tostring(b.title or b.fillType or "")
+    end)
+
+    if #data.productions == 0 then return nil end
     return data
 end
 
