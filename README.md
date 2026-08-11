@@ -4,7 +4,7 @@ Live-Connector für **Farming Simulator 25**.
 
 Der Mod liest aktuelle Zustände direkt aus der FS25-Lua-API und stellt sie dem separaten **LS25 Hof-Dashboard** als lokale JSON-Datei bereit.
 
-Aktuelle Mod-Version: **5.0.1**
+Aktuelle Mod-Version: **5.1.0**
 
 ## Architektur
 
@@ -264,9 +264,9 @@ Stellt Tier- und Produktions-Collector die kanonische FS25-Placeable-Registry zu
 
 ```json
 {
-  "version": "5.0.1",
+  "version": "5.1.0",
   "protocolVersion": 1,
-  "minimumDashboardVersion": "5.0.1",
+  "minimumDashboardVersion": "5.1.0",
   "modName": "FS25_HofDashboard",
   "timestamp": "2026-08-09T03:00:00",
   "farm": {},
@@ -287,7 +287,7 @@ Stellt Tier- und Produktions-Collector die kanonische FS25-Placeable-Registry zu
 Im `log.txt` sollte nach dem Laden künftig ein Eintrag mit dem neuen Modnamen erscheinen:
 
 ```text
-[FS25_HofDashboard] v5.0.1 aktiv
+[FS25_HofDashboard] v5.1.0 aktiv
 ```
 
 Wenn `liveData.json` fehlt:
