@@ -9,13 +9,19 @@
     <description>
         <en>Provides live Farming Simulator 25 data for the LS25 Hof-Dashboard.
 Writes to: modSettings/LS25HofDashboard/liveData.json</en>
-        <de>Liefert Live-Daten aus Farming Simulator 25 für das LS25 Hof-Dashboard.
+        <de>Liefert Live-Daten aus Farming Simulator 25 fÃ¼r das LS25 Hof-Dashboard.
 Schreibt nach: modSettings/LS25HofDashboard/liveData.json</de>
     </description>
     <multiplayer supported="false"/>
     <extraSourceFiles>
         <sourceFile filename="scripts/Version.lua"/>
         <sourceFile filename="scripts/HofDashboard.lua"/>
+        <sourceFile filename="scripts/FieldsCollector.lua"/>
+        <sourceFile filename="scripts/VehiclesCollector.lua"/>
+        <sourceFile filename="scripts/AnimalsCollector.lua"/>
+        <sourceFile filename="scripts/ProductionsCollector.lua"/>
+        <sourceFile filename="scripts/ContractsCollector.lua"/>
+        <sourceFile filename="scripts/MarketCollector.lua"/>
         <sourceFile filename="scripts/PlaceableRegistryAdapter.lua"/>
     </extraSourceFiles>
 </modDesc>

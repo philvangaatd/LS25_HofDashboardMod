@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/philvangaatd/LS25_Dashboard/docs/live-data.schema.json",
+  "title": "LS25 Hof-Dashboard liveData.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "protocolVersion",
+    "minimumDashboardVersion",
+    "timestamp",
+    "farm",
+    "fields",
+    "vehicles",
+    "animals",
+    "beehives",
+    "productions",
+    "contracts",
+    "market"
+  ],
+  "properties": {
+    "version": { "type": "string", "minLength": 1 },
+    "protocolVersion": { "type": "integer", "const": 1 },
+    "minimumDashboardVersion": { "type": "string", "minLength": 1 },
+    "modName": { "type": "string" },
+    "mapName": { "type": "string" },
+    "timestamp": { "type": "string", "minLength": 1 },
+    "currentDay": { "type": "integer", "minimum": 0 },
+    "daysPerPeriod": { "type": "integer", "minimum": 1 },
+    "farm": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["farmId", "name", "money", "loan"],
+      "properties": {
+        "farmId": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string" },
+        "money": { "type": "number" },
+        "loan": { "type": "number" }
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/field" }
+    },
+    "vehicles": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/vehicle" }
+    },
+    "vehicleDiagnostics": { "$ref": "#/$defs/diagnostics" },
+    "animals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/animalHusbandry" }
+    },
+    "animalDiagnostics": { "$ref": "#/$defs/diagnostics" },
+    "beehives": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["hiveCount", "activeHiveCount", "honeyLitersPerHour", "pendingHoneyLiters"],
+      "properties": {
+        "hiveCount": { "type": "integer", "minimum": 0 },
+        "activeHiveCount": { "type": "integer", "minimum": 0 },
+        "honeyLitersPerHour": { "type": "number", "minimum": 0 },
+        "pendingHoneyLiters": { "type": "number", "minimum": 0 }
+      }
+    },
+    "productions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/productionPoint" }
+    },
+    "contracts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contract" }
+    },
+    "market": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/marketEntry" }
+    }
+  },
+  "$defs": {
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "seen": { "type": "integer", "minimum": 0 },
+        "exported": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "farmId", "fieldStatus", "statusPercentages", "fruitType"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "farmId": { "type": "integer", "minimum": 0 },
+        "farmlandId": { "type": "integer", "minimum": 0 },
+        "area": { "type": "number", "minimum": 0 },
+        "fieldStatus": { "type": "string" },
+        "statusPercentages": { "type": "object" },
+        "fruitType": { "type": "string" },
+        "fruitTitle": { "type": "string" }
+      }
+    },
+    "vehicle": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["uniqueId", "farmId", "vehicleCategory", "name", "fillUnits"],
+      "properties": {
+        "uniqueId": { "type": "string" },
+        "farmId": { "type": "integer", "minimum": 0 },
+        "vehicleCategory": { "type": "string" },
+        "name": { "type": "string" },
+        "fillUnits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fillUnit" }
+        }
+      }
+    },
+    "fillUnit": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "fillType", "title", "liters", "capacity", "percent"],
+      "properties": {
+        "kind": { "type": "string" },
+        "fillType": { "type": "string" },
+        "title": { "type": "string" },
+        "liters": { "type": "number", "minimum": 0 },
+        "capacity": { "type": "number", "minimum": 0 },
+        "percent": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "animalHusbandry": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["uniqueId", "farmId", "animalType", "totalAnimals", "clusters", "food", "water", "outputs"],
+      "properties": {
+        "uniqueId": { "type": "string" },
+        "farmId": { "type": "integer", "minimum": 0 },
+        "animalType": { "type": "string" },
+        "totalAnimals": { "type": "integer", "minimum": 0 },
+        "clusters": { "type": "array" },
+        "food": { "type": "object" },
+        "water": { "type": "object" },
+        "outputs": { "type": "array" }
+      }
+    },
+    "productionPoint": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["farmId", "name", "productions", "storages"],
+      "properties": {
+        "farmId": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string" },
+        "productions": { "type": "array" },
+        "storages": { "type": "array" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["farmId", "type", "title", "reward", "fieldId", "isActive", "progress"],
+      "properties": {
+        "farmId": { "type": "integer", "minimum": 0 },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "reward": { "type": "number" },
+        "fieldId": { "type": "integer", "minimum": 0 },
+        "isActive": { "type": "boolean" },
+        "progress": { "type": "number", "minimum": 0 }
+      }
+    },
+    "marketEntry": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["fillType", "title", "category", "bestPrice", "stations"],
+      "properties": {
+        "fillType": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "bestPrice": { "type": "number", "minimum": 0 },
+        "stations": { "type": "array" }
+      }
+    }
+  }
+}

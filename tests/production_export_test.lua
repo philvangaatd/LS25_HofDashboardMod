@@ -7,6 +7,9 @@ HofDashboardRelease = {
 function addModEventListener(_) end
 
 dofile("scripts/HofDashboard.lua")
+dofile("scripts/VehiclesCollector.lua")
+dofile("scripts/AnimalsCollector.lua")
+dofile("scripts/ProductionsCollector.lua")
 
 local tomato = {
     id = "tomato",
@@ -41,7 +44,7 @@ g_fillTypeManager = {
 
 local placeable = {
     ownerFarmId = 1,
-    getName = function() return "Mittleres Foliengewächshaus" end,
+    getName = function() return "Mittleres FoliengewÃ¤chshaus" end,
     spec_productionPoint = {
         productionPoint = {
             productions = {tomato, strawberry},
