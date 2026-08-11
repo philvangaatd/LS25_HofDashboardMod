@@ -1,5 +1,5 @@
 --[[
-    LS25 Hof-Dashboard – Live Connector v5.0.1
+    LS25 Hof-Dashboard – Live Connector v5.1.0
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
