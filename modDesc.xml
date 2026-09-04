@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>LS25 Hof-Dashboard</author>
-    <version>5.2.0.0</version>
+    <version>5.3.0.0</version>
     <title>
         <en>LS25 Hof-Dashboard - Live Connector</en>
         <de>LS25 Hof-Dashboard - Live Connector</de>
     </title>
     <description>
-        <en>Provides live Farming Simulator 25 data for the LS25 Hof-Dashboard.
+        <en>Provides near-live Farming Simulator 25 data for the LS25 Hof-Dashboard.
 Writes to: modSettings/LS25HofDashboard/liveData.json</en>
-        <de>Liefert Live-Daten aus Farming Simulator 25 für das LS25 Hof-Dashboard.
+        <de>Liefert nahezu in Echtzeit aktualisierte Daten aus Farming Simulator 25 für das LS25 Hof-Dashboard.
 Schreibt nach: modSettings/LS25HofDashboard/liveData.json</de>
     </description>
     <multiplayer supported="false"/>
