@@ -1,7 +1,7 @@
 --[[
-    LS25 Hof-Dashboard – Live Connector v5.2.0
+    LS25 Hof-Dashboard – Live Connector v5.3.0
     =================================================
-    Schreibt alle 15 Sekunden eine JSON-Datei nach:
+    Schreibt alle 2 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
 
     Datenfluss: FS25 Lua API -> liveData.json -> PHP API -> Frontend.
@@ -24,7 +24,7 @@ HofDashboardLive.PROTOCOL_VERSION = RELEASE.PROTOCOL_VERSION
 HofDashboardLive.MIN_DASHBOARD_VERSION = RELEASE.MIN_DASHBOARD_VERSION
 HofDashboardLive.SETTINGS_DIR    = "LS25HofDashboard"
 HofDashboardLive.OUTPUT_FILE     = "liveData.json"
-HofDashboardLive.UPDATE_INTERVAL = 15000
+HofDashboardLive.UPDATE_INTERVAL = 2000
 HofDashboardLive.FIELD_SAMPLE_TARGET = 81
 HofDashboardLive.timer           = 0
 HofDashboardLive.isReady         = false
@@ -122,7 +122,7 @@ function HofDashboardLive:loadMap(filename)
     addFuel(FillType.METHANE,        "METHANE",        "Methan")
     addFuel(FillType.GASOLINE,       "GASOLINE",       "Benzin")
 
-    print(string.format("[%s] v%s aktiv – exportiert alle %ds",
+    print(string.format("[%s] v%s aktiv – exportiert alle %.1fs",
         self.MOD_NAME, self.VERSION, self.UPDATE_INTERVAL / 1000))
 end
 
@@ -154,6 +154,7 @@ function HofDashboardLive:exportAllData()
         protocolVersion = self.PROTOCOL_VERSION,
         minimumDashboardVersion = self.MIN_DASHBOARD_VERSION,
         modName       = self.MOD_NAME,
+        updateIntervalMs = self.UPDATE_INTERVAL,
         timestamp     = getDate("%Y-%m-%dT%H:%M:%S"),
         mapName       = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),
         currentDay    = self:safeGet(function() return g_currentMission.environment.currentDay or 0 end, 0),
