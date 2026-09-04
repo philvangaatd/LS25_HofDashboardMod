@@ -1,0 +1,78 @@
+name: Build and release mod
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $content = Get-Content -Raw -LiteralPath "scripts/Version.lua"
+          $match = [regex]::Match($content, 'MOD_VERSION\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw "MOD_VERSION not found." }
+          $version = $match.Groups[1].Value
+          $tag = "v$version"
+          [xml]$modDesc = Get-Content -Raw -LiteralPath "modDesc.xml"
+          $xmlVersion = [string]$modDesc.modDesc.version
+          if ($xmlVersion -ne "$version.0") { throw "Version mismatch: Version.lua=$version, modDesc.xml=$xmlVersion" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "publish=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Release $tag already exists; skipping publication."
+          } else {
+            "publish=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build mod ZIP
+        if: steps.meta.outputs.publish == 'true'
+        shell: pwsh
+        run: ./scripts/build-release.ps1 -ArtifactDirectory dist
+
+      - name: Verify package
+        if: steps.meta.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist/FS25_HofDashboard.zip" -PathType Leaf)) {
+            throw "FS25_HofDashboard.zip was not created."
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist/FS25_HofDashboard.zip").Hash.ToLowerInvariant()
+          Write-Host "SHA-256: $hash"
+
+      - name: Publish GitHub release
+        if: steps.meta.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          $notes = @"
+          ## LS25 Hof-Dashboard Mod v$env:VERSION
+
+          ### Neu
+          - exportiert Hof-Vorräte für die neue Dashboard-Übersicht
+          - unterstützt Silos, Silo-Erweiterungen, Misthaufen und Gülle aus Tierhaltungen
+          - unterstützt GIANTS ObjectStorage für Ballen- und Palettenlager inklusive Mod-Placeables
+          - dedupliziert physische Storage-Objekte, damit Erweiterungen nicht doppelt summiert werden
+          - Protokollversion bleibt 1; Mindest-Dashboard-Version ist v$env:VERSION
+
+          ### Installation
+          Landwirtschafts-Simulator 25 schließen und die vorhandene `FS25_HofDashboard.zip` im Mod-Ordner durch die Release-Datei ersetzen. Die ZIP nicht entpacken.
+          "@
+          $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          gh release create $env:TAG "dist/FS25_HofDashboard.zip" --repo $env:GITHUB_REPOSITORY --title "LS25 Hof-Dashboard Mod v$env:VERSION" --notes-file release-notes.md

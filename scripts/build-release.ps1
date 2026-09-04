@@ -54,6 +54,7 @@ $requiredEntries = @(
     "scripts/VehiclesCollector.lua",
     "scripts/AnimalsCollector.lua",
     "scripts/ProductionsCollector.lua",
+    "scripts/StorageCollector.lua",
     "scripts/ContractsCollector.lua",
     "scripts/MarketCollector.lua",
     "scripts/PlaceableRegistryAdapter.lua"

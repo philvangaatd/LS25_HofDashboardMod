@@ -1,5 +1,5 @@
 --[[
-    LS25 Hof-Dashboard – Live Connector v5.1.0
+    LS25 Hof-Dashboard – Live Connector v5.2.0
     =================================================
     Schreibt alle 15 Sekunden eine JSON-Datei nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
@@ -166,6 +166,7 @@ function HofDashboardLive:exportAllData()
         animalDiagnostics = self.animalDiagnostics or { seen = 0, exported = 0, failed = 0, skipped = 0 },
         beehives       = self:collectBeehives(),
         productions    = self:collectProductions(),
+        storages       = self:collectStorages(),
         contracts      = self:collectContracts(),
         market         = self:collectMarket(),
     }
