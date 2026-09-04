@@ -66,15 +66,20 @@ jobs:
           $notes = @"
           ## LS25 Hof-Dashboard Mod v$env:VERSION
 
-          ### Neu
-          - exportiert Hof-Vorräte für die neue Dashboard-Übersicht
-          - unterstützt Silos, Silo-Erweiterungen, Misthaufen und Gülle aus Tierhaltungen
-          - unterstützt GIANTS ObjectStorage für Ballen- und Palettenlager inklusive Mod-Placeables
-          - dedupliziert physische Storage-Objekte, damit Erweiterungen nicht doppelt summiert werden
-          - Protokollversion bleibt 1; Mindest-Dashboard-Version ist v$env:VERSION
+          ### Near-Live-Daten
+          - vollständiger Live-Export jetzt alle 2 Sekunden statt alle 15 Sekunden
+          - Dashboard kann Änderungen dadurch praktisch unmittelbar darstellen
+          - Exportintervall wird zusätzlich als updateIntervalMs im Live-Payload veröffentlicht
+          - Protokollversion bleibt 1; bestehende Collector-Struktur bleibt kompatibel
+
+          ### Enthaltene Live-Daten
+          - Felder, Fahrzeuge, Tiere und Bienen
+          - aktive Produktionen und Vorräte
+          - Verträge und Marktpreise
+          - kompatible GIANTS- und Mod-Lager
 
           ### Installation
-          Landwirtschafts-Simulator 25 schließen und die vorhandene `FS25_HofDashboard.zip` im Mod-Ordner durch die Release-Datei ersetzen. Die ZIP nicht entpacken.
+          Das Windows-Dashboard kann diese Mod-Version automatisch installieren bzw. aktualisieren. Bei manueller Installation Landwirtschafts-Simulator 25 schließen und die vorhandene FS25_HofDashboard.zip im Mod-Ordner ersetzen. Die ZIP nicht entpacken.
           "@
           $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
           gh release create $env:TAG "dist/FS25_HofDashboard.zip" --repo $env:GITHUB_REPOSITORY --title "LS25 Hof-Dashboard Mod v$env:VERSION" --notes-file release-notes.md
