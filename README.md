@@ -1,27 +1,38 @@
 # LS25 Hof-Dashboard Mod
 
-Live-Connector-Mod fuer Landwirtschafts-Simulator 25. Die Mod schreibt aktuelle Spieldaten fuer das LS25 Hof-Dashboard nach `modSettings/LS25HofDashboard/liveData.json`.
+Live-Connector-Mod für Landwirtschafts-Simulator 25. Die Mod schreibt aktuelle Spieldaten für das LS25 Hof-Dashboard nach `modSettings/LS25HofDashboard/liveData.json`.
 
 ## Aktuelle Version
 
-- Mod: `5.1.0`
-- kompatibles Dashboard: ab `5.1.0`
+- Mod: `5.3.0`
+- kompatibles Dashboard: ab `5.2.0`
 - Protokollversion: `1`
+- Live-Export: alle `2 Sekunden`
 
 ## Installation
 
-1. Den aktuellen Release herunterladen: `FS25_HofDashboard.zip`
-2. Die ZIP-Datei unveraendert in den LS25-Modordner legen.
+Im normalen Betrieb wird die Mod direkt über das Windows-Dashboard installiert und aktualisiert. Eine separate manuelle Installation ist deshalb normalerweise nicht mehr nötig.
+
+Für eine manuelle Installation:
+
+1. Den aktuellen Release `FS25_HofDashboard.zip` herunterladen.
+2. Die ZIP-Datei unverändert in den LS25-Modordner legen.
 3. Landwirtschafts-Simulator 25 starten.
 4. Die Mod im Spielstand aktivieren.
 
+## Near-Live-Daten
+
+Seit v5.3.0 wird der vollständige Live-Datensatz alle zwei Sekunden exportiert. Das Dashboard kann die Datei häufiger abfragen und neue Exporte dadurch praktisch unmittelbar darstellen, ohne den kompletten Hofzustand auf jedem Spiel-Frame neu zu serialisieren.
+
 ## Exportierte Daten
 
+- Hofdaten und Finanzen
 - Felder
-- Fahrzeuge
-- Tiere
-- Produktionen
-- Vertraege
+- Fahrzeuge und Geräte
+- Tiere und Bienen
+- aktive Produktionen
+- Vorräte und kompatible Mod-Lager
+- Verträge
 - Marktpreise
 
 ## Releases
