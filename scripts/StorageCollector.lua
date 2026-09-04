@@ -18,6 +18,38 @@ function HofDashboardLive:getStorageOwnerFarmId(placeable)
     return placeable.ownerFarmId or 0
 end
 
+function HofDashboardLive:getPhysicalStorageOwnerFarmId(storage)
+    if storage == nil then return 0 end
+    if storage.getOwnerFarmId ~= nil then
+        local value = self:safeGet(function() return storage:getOwnerFarmId() end, nil)
+        if type(value) == "number" then return value end
+    end
+    return storage.ownerFarmId or 0
+end
+
+function HofDashboardLive:canAccessStoragePlaceable(placeable, ownerFarmId, playerFarmId)
+    if placeable == nil then return false end
+    if playerFarmId > 0 and ownerFarmId == playerFarmId then return true end
+
+    local mission = g_currentMission
+    local accessHandler = mission and mission.accessHandler or nil
+    if accessHandler ~= nil and playerFarmId > 0 and accessHandler.canFarmAccess ~= nil then
+        local canAccess = self:safeGet(function()
+            return accessHandler:canFarmAccess(playerFarmId, placeable)
+        end, false)
+        if canAccess == true then return true end
+    end
+
+    if accessHandler ~= nil and accessHandler.canPlayerAccess ~= nil then
+        local canAccess = self:safeGet(function()
+            return accessHandler:canPlayerAccess(placeable)
+        end, false)
+        if canAccess == true then return true end
+    end
+
+    return playerFarmId <= 0 and ownerFarmId > 0
+end
+
 function HofDashboardLive:getStorageFillTypeData(fillTypeIndex)
     local fillType = nil
     if fillTypeIndex ~= nil and g_fillTypeManager ~= nil then
@@ -80,8 +112,16 @@ function HofDashboardLive:addPhysicalStorage(record, storage, seenStorages)
     end
     record.capacityLiters = record.capacityLiters + capacityLiters
 
+    local supportedFillTypes = type(storage.fillTypes) == "table" and storage.fillTypes or {}
+    for fillTypeIndex, accepted in pairs(supportedFillTypes) do
+        if accepted == true then
+            record._supportedFillTypes[fillTypeIndex] = true
+        end
+    end
+
     local fillLevels = type(storage.fillLevels) == "table" and storage.fillLevels or {}
     for fillTypeIndex, fillLevel in pairs(fillLevels) do
+        record._supportedFillTypes[fillTypeIndex] = true
         local level = storageNumber(fillLevel)
         if level > 0 then
             local fallbackCapacity = storage.capacities and storage.capacities[fillTypeIndex]
@@ -98,6 +138,76 @@ function HofDashboardLive:addPhysicalStorage(record, storage, seenStorages)
     end
 
     return true
+end
+
+function HofDashboardLive:addStationStorages(record, station, collectionName, seenStorages)
+    if record == nil or station == nil then return false end
+    local collection = station[collectionName]
+    if type(collection) ~= "table" then return false end
+
+    local added = false
+    for key, value in pairs(collection) do
+        local storage = nil
+        if type(value) == "table" then
+            storage = value
+        elseif type(key) == "table" then
+            storage = key
+        end
+        if storage ~= nil and self:addPhysicalStorage(record, storage, seenStorages) then
+            added = true
+        end
+    end
+    return added
+end
+
+function HofDashboardLive:addOwnedStationStorages(record, placeable, seenStorages)
+    local mission = g_currentMission
+    local storageSystem = mission and mission.storageSystem or nil
+    if storageSystem == nil then return false end
+
+    local added = false
+    local loadingStations = self:safeGet(function()
+        return storageSystem.getLoadingStations and storageSystem:getLoadingStations() or storageSystem.loadingStations
+    end, storageSystem.loadingStations or {})
+    for station, value in pairs(loadingStations or {}) do
+        local candidate = type(station) == "table" and station or value
+        if candidate ~= nil and candidate.owningPlaceable == placeable then
+            if self:addStationStorages(record, candidate, "sourceStorages", seenStorages) then added = true end
+        end
+    end
+
+    local unloadingStations = self:safeGet(function()
+        return storageSystem.getUnloadingStations and storageSystem:getUnloadingStations() or storageSystem.unloadingStations
+    end, storageSystem.unloadingStations or {})
+    for station, value in pairs(unloadingStations or {}) do
+        local candidate = type(station) == "table" and station or value
+        if candidate ~= nil and candidate.owningPlaceable == placeable then
+            if self:addStationStorages(record, candidate, "targetStorages", seenStorages) then added = true end
+        end
+    end
+
+    return added
+end
+
+function HofDashboardLive:classifyStorageRecord(record)
+    if record == nil or record.type ~= "storage" then return end
+
+    local names = {}
+    for fillTypeIndex, _ in pairs(record._supportedFillTypes or {}) do
+        local data = self:getStorageFillTypeData(fillTypeIndex)
+        names[string.upper(tostring(data.fillType))] = true
+    end
+
+    if names.LIQUIDMANURE and next(names, "LIQUIDMANURE") == nil then
+        record.type = "liquidManure"
+        record.typeLabel = "Güllebehälter"
+    elseif names.MANURE and next(names, "MANURE") == nil then
+        record.type = "manureHeap"
+        record.typeLabel = "Misthaufen"
+    elseif names.DIGESTATE and next(names, "DIGESTATE") == nil then
+        record.type = "digestate"
+        record.typeLabel = "Gärrestlager"
+    end
 end
 
 function HofDashboardLive:getStoredObjectSnapshot(abstractObject)
@@ -154,7 +264,7 @@ function HofDashboardLive:processStoragePlaceable(placeable, placeableIndex, see
 
     local farmId = self:getStorageOwnerFarmId(placeable)
     local playerFarmId = self:getPlayerFarmId()
-    if farmId <= 0 or (playerFarmId > 0 and farmId ~= playerFarmId) then return nil end
+    if not self:canAccessStoragePlaceable(placeable, farmId, playerFarmId) then return nil end
 
     local placeableName = self:safeGet(function()
         if placeable.getName ~= nil then return placeable:getName() end
@@ -180,6 +290,7 @@ function HofDashboardLive:processStoragePlaceable(placeable, placeableIndex, see
         supportsPallets = false,
         contents = self:newArray(),
         _contentsByKey = {},
+        _supportedFillTypes = {},
     }
     local recognized = false
 
@@ -216,6 +327,7 @@ function HofDashboardLive:processStoragePlaceable(placeable, placeableIndex, see
             record.type = "liquidManure"
             record.typeLabel = "Güllebehälter"
         end
+        record._supportedFillTypes[liquidManureSpec.fillType] = true
         local fillData = self:getStorageFillTypeData(liquidManureSpec.fillType)
         local contentKey = string.upper(tostring(fillData.fillType))
         if record._contentsByKey[contentKey] == nil then
@@ -265,12 +377,64 @@ function HofDashboardLive:processStoragePlaceable(placeable, placeableIndex, see
         end
     end
 
+    -- Einige Standalone-Tanks und Mod-Placeables hängen ihre Storage-Objekte nur
+    -- an Loading-/UnloadingStations. Diese Verbindung ist Teil des GIANTS-
+    -- StorageSystems und wird deshalb als generischer Fallback ausgewertet.
+    if not recognized and self:addOwnedStationStorages(record, placeable, seenStorages) then
+        recognized = true
+        self:classifyStorageRecord(record)
+    end
+
     if not recognized then return nil end
 
+    self:classifyStorageRecord(record)
     table.sort(record.contents, function(a, b)
         return tostring(a.title or a.fillType or "") < tostring(b.title or b.fillType or "")
     end)
     record._contentsByKey = nil
+    record._supportedFillTypes = nil
+    return record
+end
+
+function HofDashboardLive:createFallbackStorageRecord(storage, index, seenStorages)
+    if storage == nil or seenStorages[storage] then return nil end
+
+    local playerFarmId = self:getPlayerFarmId()
+    local farmId = self:getPhysicalStorageOwnerFarmId(storage)
+    if playerFarmId > 0 and farmId ~= playerFarmId then return nil end
+    if playerFarmId <= 0 and farmId <= 0 then return nil end
+
+    local storageName = self:safeGet(function()
+        if storage.getName ~= nil then return storage:getName() end
+        return nil
+    end, nil)
+    if storageName == nil or storageName == "" then storageName = "Hof-Lager " .. tostring(index) end
+
+    local record = {
+        id = "storageSystem:" .. tostring(index),
+        name = tostring(storageName),
+        type = "storage",
+        typeLabel = "Lager",
+        farmId = farmId,
+        isMod = false,
+        modName = "",
+        capacityLiters = 0,
+        objectCount = 0,
+        objectCapacity = 0,
+        supportsBales = false,
+        supportsPallets = false,
+        contents = self:newArray(),
+        _contentsByKey = {},
+        _supportedFillTypes = {},
+    }
+
+    if not self:addPhysicalStorage(record, storage, seenStorages) then return nil end
+    self:classifyStorageRecord(record)
+    table.sort(record.contents, function(a, b)
+        return tostring(a.title or a.fillType or "") < tostring(b.title or b.fillType or "")
+    end)
+    record._contentsByKey = nil
+    record._supportedFillTypes = nil
     return record
 end
 
@@ -287,6 +451,27 @@ function HofDashboardLive:collectStorages()
             function() return self:processStoragePlaceable(placeable, placeableIndex, seenStorages) end
         )
         if ok and data ~= nil then table.insert(result, data) end
+    end
+
+    -- Letzter Sicherheitsnetz-Fallback: vom GIANTS StorageSystem registrierte,
+    -- dem Spielerhof gehörende Storages aufnehmen, die keine bekannte
+    -- Placeable-Spezialisierung offenlegen. Bereits gefundene Storages sind
+    -- durch seenStorages ausgeschlossen.
+    local storageSystem = g_currentMission.storageSystem
+    if storageSystem ~= nil then
+        local storages = self:safeGet(function()
+            return storageSystem.getStorages and storageSystem:getStorages() or storageSystem.storages
+        end, storageSystem.storages or {})
+        local storageIndex = 0
+        for storage, value in pairs(storages or {}) do
+            storageIndex = storageIndex + 1
+            local candidate = type(storage) == "table" and storage or value
+            local ok, data = self:protected(
+                "fallbackStorage " .. tostring(storageIndex),
+                function() return self:createFallbackStorageRecord(candidate, storageIndex, seenStorages) end
+            )
+            if ok and data ~= nil then table.insert(result, data) end
+        end
     end
 
     table.sort(result, function(a, b)
