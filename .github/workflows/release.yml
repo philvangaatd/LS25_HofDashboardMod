@@ -66,16 +66,20 @@ jobs:
           $notes = @"
           ## LS25 Hof-Dashboard Mod v$env:VERSION
 
-          ### Lager-Erkennung
-          - Standalone-Silos und Güllebehälter werden nicht mehr allein anhand einer einzelnen Placeable-Spezialisierung erkannt
-          - zusätzlich werden die offiziellen GIANTS Loading-/UnloadingStation-Verknüpfungen ausgewertet
-          - zugängliche Hoflager mit neutraler oder abweichender Owner-ID werden über den AccessHandler berücksichtigt
-          - als Sicherheitsnetz werden noch nicht zugeordnete, dem Spielerhof gehörende Storages aus dem GIANTS StorageSystem erkannt
-          - deduplizierte Storage-Objekte verhindern weiterhin Doppelzählungen
+          ### Aufgeräumt
+          - die experimentelle Vorräte-/Storage-Erkennung wurde vollständig aus der Live-Mod entfernt
+          - StorageCollector und nachgelagerte Compatibility-Fixes sind nicht mehr Bestandteil des Pakets
+          - der Live-Datenvertrag enthält keinen separaten storages-Block mehr
 
-          ### Near-Live-Daten
-          - vollständiger Live-Export weiterhin alle 2 Sekunden
+          ### Performance
+          - der 2-Sekunden-Near-Live-Export bleibt erhalten
+          - teure Collector laufen jetzt mit abgestuften Intervallen und werden zwischen Exporten gecacht
+          - Fahrzeuge und Hofwerte bleiben schnell, während Felder, Tiere, Produktionen, Verträge und Markt nicht mehr unnötig alle zwei Sekunden komplett neu analysiert werden
+          - sectionRevisions erlauben dem Dashboard gezieltere Aktualisierungen ohne permanente Voll-Renderings
+
+          ### Kompatibilität
           - Protokollversion bleibt 1
+          - benötigt LS25 Hof-Dashboard v5.8.0 oder neuer
 
           ### Installation
           Das Windows-Dashboard kann diese Mod-Version automatisch installieren bzw. aktualisieren. Bei manueller Installation Landwirtschafts-Simulator 25 schließen und die vorhandene FS25_HofDashboard.zip im Mod-Ordner ersetzen. Die ZIP nicht entpacken.
