@@ -52,10 +52,9 @@ $requiredEntries = @(
     "scripts/HofDashboard.lua",
     "scripts/FieldsCollector.lua",
     "scripts/VehiclesCollector.lua",
+    "scripts/LiveMapCollector.lua",
     "scripts/AnimalsCollector.lua",
     "scripts/ProductionsCollector.lua",
-    "scripts/StorageCollector.lua",
-    "scripts/StorageCollectorFix.lua",
     "scripts/ContractsCollector.lua",
     "scripts/MarketCollector.lua",
     "scripts/PlaceableRegistryAdapter.lua"
@@ -68,6 +67,9 @@ try {
         if ($entryNames -notcontains $requiredEntry) {
             throw "Required package entry is missing: $requiredEntry"
         }
+    }
+    if ($entryNames -contains "scripts/StorageCollector.lua" -or $entryNames -contains "scripts/StorageCollectorFix.lua") {
+        throw "Retired storage collector code must not be included in the package."
     }
     if ($entryNames | Where-Object { $_ -like "*\*" }) {
         throw "Package contains backslash paths. GIANTS Engine expects slash-separated paths."
