@@ -1,12 +1,14 @@
 --[[
-    LS25 Hof-Dashboard – Live Connector v5.3.0
+    LS25 Hof-Dashboard – Live Connector v5.5.0
     =================================================
-    Schreibt alle 2 Sekunden eine JSON-Datei nach:
+    Schreibt Near-Live-Daten nach:
       <UserDocuments>/My Games/FarmingSimulator2025/modSettings/LS25HofDashboard/liveData.json
 
     Datenfluss: FS25 Lua API -> liveData.json -> PHP API -> Frontend.
     Der Lua-Mod ist die autoritative Quelle für alle Live-Zustände.
-    API-Referenz: https://gdn.giants-software.com/documentation_scripting_fs25.php
+    Teure Collector laufen mit abgestuften Intervallen und werden zwischen
+    den Exporten gecacht. So bleiben bewegte Daten schnell, ohne den kompletten
+    Hof alle zwei Sekunden neu analysieren zu müssen.
 ]]
 
 local MODNAME = g_currentModName or "FS25_HofDashboard"
@@ -17,20 +19,36 @@ if RELEASE == nil then
     error("[FS25_HofDashboard] scripts/Version.lua wurde nicht vor dem Kernmodul geladen")
 end
 
-HofDashboardLive                 = {}
-HofDashboardLive.MOD_NAME        = MODNAME
-HofDashboardLive.VERSION         = RELEASE.MOD_VERSION
-HofDashboardLive.PROTOCOL_VERSION = RELEASE.PROTOCOL_VERSION
+HofDashboardLive                    = {}
+HofDashboardLive.MOD_NAME           = MODNAME
+HofDashboardLive.VERSION            = RELEASE.MOD_VERSION
+HofDashboardLive.PROTOCOL_VERSION   = RELEASE.PROTOCOL_VERSION
 HofDashboardLive.MIN_DASHBOARD_VERSION = RELEASE.MIN_DASHBOARD_VERSION
-HofDashboardLive.SETTINGS_DIR    = "LS25HofDashboard"
-HofDashboardLive.OUTPUT_FILE     = "liveData.json"
-HofDashboardLive.UPDATE_INTERVAL = 2000
+HofDashboardLive.SETTINGS_DIR       = "LS25HofDashboard"
+HofDashboardLive.OUTPUT_FILE        = "liveData.json"
+HofDashboardLive.UPDATE_INTERVAL    = 2000
 HofDashboardLive.FIELD_SAMPLE_TARGET = 81
-HofDashboardLive.timer           = 0
-HofDashboardLive.isReady         = false
-HofDashboardLive.FUEL_TYPES      = nil
-HofDashboardLive.FUEL_BY_INDEX   = nil
-HofDashboardLive.GROUND_TYPE_NAMES = {}
+HofDashboardLive.timer              = 0
+HofDashboardLive.runtimeMs          = 0
+HofDashboardLive.isReady            = false
+HofDashboardLive.FUEL_TYPES         = nil
+HofDashboardLive.FUEL_BY_INDEX      = nil
+HofDashboardLive.GROUND_TYPE_NAMES  = {}
+HofDashboardLive.collectorCache     = {}
+HofDashboardLive.sectionRevisions   = {}
+
+-- Nicht alle Daten ändern sich mit derselben Geschwindigkeit. Besonders die
+-- flächenweite Feldanalyse ist deutlich teurer als Geld/Fahrzeugwerte.
+HofDashboardLive.COLLECT_INTERVALS = {
+    farm = 2000,
+    vehicles = 2000,
+    fields = 6000,
+    animals = 6000,
+    beehives = 6000,
+    productions = 5000,
+    contracts = 8000,
+    market = 12000,
+}
 
 -- ======================================================================
 -- HILFSFUNKTIONEN
@@ -81,9 +99,49 @@ function HofDashboardLive:getPlayerFarmId()
     return 0
 end
 
+function HofDashboardLive:getPlaceables()
+    if g_currentMission == nil then return {} end
+    local placeableSystem = g_currentMission.placeableSystem
+    if placeableSystem ~= nil and type(placeableSystem.placeables) == "table" then
+        return placeableSystem.placeables
+    end
+    return type(g_currentMission.placeables) == "table" and g_currentMission.placeables or {}
+end
+
+function HofDashboardLive:collectCached(key, intervalMs, collector, fallback)
+    local cache = self.collectorCache[key]
+    local due = cache == nil or (self.runtimeMs - cache.updatedAt) >= intervalMs
+
+    if due then
+        local ok, value = self:protected("collect:" .. tostring(key), collector)
+        if ok and value ~= nil then
+            local revision = (self.sectionRevisions[key] or 0) + 1
+            self.sectionRevisions[key] = revision
+            cache = {
+                value = value,
+                updatedAt = self.runtimeMs,
+                revision = revision,
+            }
+            self.collectorCache[key] = cache
+        elseif cache == nil then
+            cache = {
+                value = fallback,
+                updatedAt = self.runtimeMs,
+                revision = self.sectionRevisions[key] or 0,
+            }
+            self.collectorCache[key] = cache
+        end
+    end
+
+    return cache.value, cache.revision or 0
+end
+
 function HofDashboardLive:loadMap(filename)
     self.isReady = true
     self.timer = self.UPDATE_INTERVAL
+    self.runtimeMs = 0
+    self.collectorCache = {}
+    self.sectionRevisions = {}
 
     self.GROUND_TYPE_NAMES = {}
     if FieldGroundType ~= nil then
@@ -97,7 +155,6 @@ function HofDashboardLive:loadMap(filename)
             local value = FieldGroundType[name]
             if type(value) == "number" then self.GROUND_TYPE_NAMES[value] = name end
         end
-        -- Unbekannte/neue GIANTS-Typen zusätzlich aufnehmen.
         for name, value in pairs(FieldGroundType) do
             if type(name) == "string" and type(value) == "number" and self.GROUND_TYPE_NAMES[value] == nil then
                 self.GROUND_TYPE_NAMES[value] = name
@@ -122,20 +179,23 @@ function HofDashboardLive:loadMap(filename)
     addFuel(FillType.METHANE,        "METHANE",        "Methan")
     addFuel(FillType.GASOLINE,       "GASOLINE",       "Benzin")
 
-    print(string.format("[%s] v%s aktiv – exportiert alle %.1fs",
+    print(string.format("[%s] v%s aktiv – Export %.1fs, adaptive Collector aktiv",
         self.MOD_NAME, self.VERSION, self.UPDATE_INTERVAL / 1000))
 end
 
 function HofDashboardLive:deleteMap()
     self.isReady = false
+    self.collectorCache = {}
+    self.sectionRevisions = {}
 end
 
 function HofDashboardLive:update(dt)
     if not self.isReady or g_currentMission == nil then return end
 
+    self.runtimeMs = self.runtimeMs + dt
     self.timer = self.timer + dt
     if self.timer >= self.UPDATE_INTERVAL then
-        self.timer = 0
+        self.timer = self.timer - self.UPDATE_INTERVAL
         local ok, err = pcall(function() self:exportAllData() end)
         if not ok then
             self:logError("Export-Fehler", err)
@@ -148,28 +208,77 @@ end
 -- ======================================================================
 
 function HofDashboardLive:exportAllData()
-    local vehicles = self:collectVehicles()
+    local farm, farmRevision = self:collectCached(
+        "farm", self.COLLECT_INTERVALS.farm,
+        function() return self:collectFarm() end,
+        { name = "", farmId = 0, money = 0, loan = 0, players = self:newArray() }
+    )
+    local vehicles, vehicleRevision = self:collectCached(
+        "vehicles", self.COLLECT_INTERVALS.vehicles,
+        function() return self:collectVehicles() end,
+        self:newArray()
+    )
+    local fields, fieldRevision = self:collectCached(
+        "fields", self.COLLECT_INTERVALS.fields,
+        function() return self:collectFields() end,
+        self:newArray()
+    )
+    local animals, animalRevision = self:collectCached(
+        "animals", self.COLLECT_INTERVALS.animals,
+        function() return self:collectAnimals() end,
+        self:newArray()
+    )
+    local beehives, beehiveRevision = self:collectCached(
+        "beehives", self.COLLECT_INTERVALS.beehives,
+        function() return self:collectBeehives() end,
+        self:newArray()
+    )
+    local productions, productionRevision = self:collectCached(
+        "productions", self.COLLECT_INTERVALS.productions,
+        function() return self:collectProductions() end,
+        self:newArray()
+    )
+    local contracts, contractRevision = self:collectCached(
+        "contracts", self.COLLECT_INTERVALS.contracts,
+        function() return self:collectContracts() end,
+        self:newArray()
+    )
+    local market, marketRevision = self:collectCached(
+        "market", self.COLLECT_INTERVALS.market,
+        function() return self:collectMarket() end,
+        self:newArray()
+    )
+
     local data = {
-        version       = self.VERSION,
+        version = self.VERSION,
         protocolVersion = self.PROTOCOL_VERSION,
         minimumDashboardVersion = self.MIN_DASHBOARD_VERSION,
-        modName       = self.MOD_NAME,
+        modName = self.MOD_NAME,
         updateIntervalMs = self.UPDATE_INTERVAL,
-        timestamp     = getDate("%Y-%m-%dT%H:%M:%S"),
-        mapName       = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),
-        currentDay    = self:safeGet(function() return g_currentMission.environment.currentDay or 0 end, 0),
+        timestamp = getDate("%Y-%m-%dT%H:%M:%S"),
+        mapName = self:safeGet(function() return g_currentMission.missionInfo.mapTitle end, "Unknown"),
+        currentDay = self:safeGet(function() return g_currentMission.environment.currentDay or 0 end, 0),
         daysPerPeriod = self:safeGet(function() return g_currentMission.environment.daysPerPeriod or 24 end, 24),
-        farm           = self:collectFarm(),
-        fields         = self:collectFields(),
-        vehicles       = vehicles,
+        sectionRevisions = {
+            farm = farmRevision,
+            vehicles = vehicleRevision,
+            fields = fieldRevision,
+            animals = animalRevision,
+            beehives = beehiveRevision,
+            productions = productionRevision,
+            contracts = contractRevision,
+            market = marketRevision,
+        },
+        farm = farm,
+        fields = fields,
+        vehicles = vehicles,
         vehicleDiagnostics = self.vehicleDiagnostics or { seen = 0, exported = #vehicles, failed = 0, skipped = 0 },
-        animals        = self:collectAnimals(),
+        animals = animals,
         animalDiagnostics = self.animalDiagnostics or { seen = 0, exported = 0, failed = 0, skipped = 0 },
-        beehives       = self:collectBeehives(),
-        productions    = self:collectProductions(),
-        storages       = self:collectStorages(),
-        contracts      = self:collectContracts(),
-        market         = self:collectMarket(),
+        beehives = beehives,
+        productions = productions,
+        contracts = contracts,
+        market = market,
     }
 
     self:writeFile(self:jsonEncode(data))
@@ -220,6 +329,9 @@ function HofDashboardLive:collectFarm()
 end
 
 -- ======================================================================
+-- DATEI
+-- ======================================================================
+
 function HofDashboardLive:writeFile(content)
     local base = getUserProfileAppPath()
     local modSettingsDir = base .. "modSettings/"
