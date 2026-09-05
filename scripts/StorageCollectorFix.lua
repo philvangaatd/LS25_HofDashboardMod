@@ -3,7 +3,14 @@
 
 local hdOriginalProcessStoragePlaceable = HofDashboardLive.processStoragePlaceable
 local hdOriginalGetStoredObjectSnapshot = HofDashboardLive.getStoredObjectSnapshot
-local hdOriginalAddPlaceableStationStorages = HofDashboardLive.addPlaceableStationStorages
+
+local function hdStorageNumber(value)
+    value = tonumber(value)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge then
+        return 0
+    end
+    return math.max(0, value)
+end
 
 local function hdSafeBool(value)
     return value == true
@@ -96,7 +103,6 @@ function HofDashboardLive:addPlaceableStationStorages(record, placeable, seenSto
         end
     end
 
-    -- Direkte Stationsreferenzen in Spezialisierungen werden von einigen Mods genutzt.
     for specName, spec in pairs(placeable) do
         if type(specName) == "string" and string.sub(specName, 1, 5) == "spec_" and type(spec) == "table" then
             for _, fieldName in ipairs({ "loadingStation", "unloadingStation" }) do
@@ -171,7 +177,6 @@ function HofDashboardLive:refineStorageRecordType(record, placeable)
         return
     end
 
-    -- Danach die vorhandene FillType-Klassifikation anwenden.
     self:classifyStorageRecord(record)
 end
 
@@ -180,7 +185,6 @@ function HofDashboardLive:processStoragePlaceable(placeable, index, seenStorages
 
     local record = hdOriginalProcessStoragePlaceable(self, placeable, index, seenStorages)
     if record == nil then
-        -- Einige Mods hängen ihre Storage-Objekte nur tief in einer Spezialisierung ein.
         local farmId = self:getStorageOwnerFarmId(placeable)
         local playerFarmId = self:getPlayerFarmId()
         if not self:canAccessStoragePlaceable(placeable, farmId, playerFarmId) then return nil end
@@ -190,21 +194,16 @@ function HofDashboardLive:processStoragePlaceable(placeable, index, seenStorages
         if not recognized then return nil end
         self.storageDiagnostics.recognized = self.storageDiagnostics.recognized + 1
     else
-        -- Wenn die normale Erkennung zwar das Placeable kennt, aber keine Storage-Daten
-        -- gefunden hat, nochmal generisch in den Spezialisierungen suchen.
-        if #record.contents == 0 and storageNumber(record.capacityLiters) <= 0 and storageNumber(record.objectCapacity) <= 0 then
+        if #record.contents == 0 and hdStorageNumber(record.capacityLiters) <= 0 and hdStorageNumber(record.objectCapacity) <= 0 then
             self:addGenericSpecStorages(record, placeable, seenStorages)
         end
     end
 
     self:refineStorageRecordType(record, placeable)
 
-    -- Leere Fahrsilo-Bodenplatten ohne Inhalt/Kapazität sind kein sinnvoller Vorrat.
-    -- Genau solche verwaisten Instanzen blieben bei manchen Placeable-Mods nach Umbauten
-    -- im PlaceableSystem sichtbar und wurden bisher fälschlich als Lager exportiert.
     if record.type == "bunkerSilo"
         and #record.contents == 0
-        and storageNumber(record.capacityLiters) <= 0 then
+        and hdStorageNumber(record.capacityLiters) <= 0 then
         return nil
     end
 
