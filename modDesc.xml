@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>LS25 Hof-Dashboard</author>
-    <version>5.4.2.0</version>
+    <version>5.5.0.0</version>
     <title>
         <en>LS25 Hof-Dashboard - Live Connector</en>
         <de>LS25 Hof-Dashboard - Live Connector</de>
@@ -21,8 +21,6 @@ Schreibt nach: modSettings/LS25HofDashboard/liveData.json</de>
         <sourceFile filename="scripts/LiveMapCollector.lua"/>
         <sourceFile filename="scripts/AnimalsCollector.lua"/>
         <sourceFile filename="scripts/ProductionsCollector.lua"/>
-        <sourceFile filename="scripts/StorageCollector.lua"/>
-        <sourceFile filename="scripts/StorageCollectorFix.lua"/>
         <sourceFile filename="scripts/ContractsCollector.lua"/>
         <sourceFile filename="scripts/MarketCollector.lua"/>
         <sourceFile filename="scripts/PlaceableRegistryAdapter.lua"/>
