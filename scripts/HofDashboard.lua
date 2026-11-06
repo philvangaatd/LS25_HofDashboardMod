@@ -13,6 +13,7 @@
 
 local MODNAME = g_currentModName or "FS25_HofDashboard"
 local JSON_ARRAY_MT = { __jsonArray = true }
+local JSON_RAW_MT = { __jsonRaw = true }
 local RELEASE = HofDashboardRelease
 
 if RELEASE == nil then
@@ -36,6 +37,8 @@ HofDashboardLive.FUEL_BY_INDEX      = nil
 HofDashboardLive.GROUND_TYPE_NAMES  = {}
 HofDashboardLive.collectorCache     = {}
 HofDashboardLive.sectionRevisions   = {}
+HofDashboardLive.serializedSectionCache = {}
+HofDashboardLive.outputPath         = nil
 
 -- Nicht alle Daten ändern sich mit derselben Geschwindigkeit. Besonders die
 -- flächenweite Feldanalyse ist deutlich teurer als Geld/Fahrzeugwerte.
@@ -136,12 +139,27 @@ function HofDashboardLive:collectCached(key, intervalMs, collector, fallback)
     return cache.value, cache.revision or 0
 end
 
+function HofDashboardLive:getSerializedSection(key, value, revision)
+    local cache = self.serializedSectionCache[key]
+    if cache == nil or cache.revision ~= revision then
+        cache = {
+            revision = revision,
+            value = setmetatable({ content = self:jsonEncode(value) }, JSON_RAW_MT),
+        }
+        self.serializedSectionCache[key] = cache
+    end
+    return cache.value
+end
+
 function HofDashboardLive:loadMap(filename)
     self.isReady = true
     self.timer = self.UPDATE_INTERVAL
     self.runtimeMs = 0
     self.collectorCache = {}
     self.sectionRevisions = {}
+    self.serializedSectionCache = {}
+    self.outputPath = nil
+    self:prepareOutputPath()
 
     self.GROUND_TYPE_NAMES = {}
     if FieldGroundType ~= nil then
@@ -187,6 +205,8 @@ function HofDashboardLive:deleteMap()
     self.isReady = false
     self.collectorCache = {}
     self.sectionRevisions = {}
+    self.serializedSectionCache = {}
+    self.outputPath = nil
 end
 
 function HofDashboardLive:update(dt)
@@ -269,16 +289,16 @@ function HofDashboardLive:exportAllData()
             contracts = contractRevision,
             market = marketRevision,
         },
-        farm = farm,
-        fields = fields,
-        vehicles = vehicles,
+        farm = self:getSerializedSection("farm", farm, farmRevision),
+        fields = self:getSerializedSection("fields", fields, fieldRevision),
+        vehicles = self:getSerializedSection("vehicles", vehicles, vehicleRevision),
         vehicleDiagnostics = self.vehicleDiagnostics or { seen = 0, exported = #vehicles, failed = 0, skipped = 0 },
-        animals = animals,
+        animals = self:getSerializedSection("animals", animals, animalRevision),
         animalDiagnostics = self.animalDiagnostics or { seen = 0, exported = 0, failed = 0, skipped = 0 },
-        beehives = beehives,
-        productions = productions,
-        contracts = contracts,
-        market = market,
+        beehives = self:getSerializedSection("beehives", beehives, beehiveRevision),
+        productions = self:getSerializedSection("productions", productions, productionRevision),
+        contracts = self:getSerializedSection("contracts", contracts, contractRevision),
+        market = self:getSerializedSection("market", market, marketRevision),
     }
 
     self:writeFile(self:jsonEncode(data))
@@ -332,16 +352,30 @@ end
 -- DATEI
 -- ======================================================================
 
+function HofDashboardLive:prepareOutputPath()
+    local ok, prepareError = pcall(function()
+        local base = getUserProfileAppPath()
+        local modSettingsDir = base .. "modSettings/"
+        local modDir = modSettingsDir .. self.SETTINGS_DIR .. "/"
+
+        createFolder(modSettingsDir)
+        createFolder(modDir)
+        self.outputPath = modDir .. self.OUTPUT_FILE
+    end)
+
+    if not ok then
+        self.outputPath = nil
+        self:logError("writeFile", prepareError or "Ausgabeordner konnte nicht vorbereitet werden")
+    end
+    return ok
+end
+
 function HofDashboardLive:writeFile(content)
-    local base = getUserProfileAppPath()
-    local modSettingsDir = base .. "modSettings/"
-    local modDir = modSettingsDir .. self.SETTINGS_DIR .. "/"
-    local targetPath = modDir .. self.OUTPUT_FILE
+    if self.outputPath == nil and not self:prepareOutputPath() then
+        return
+    end
 
-    createFolder(modSettingsDir)
-    createFolder(modDir)
-
-    local file, openError = io.open(targetPath, "w")
+    local file, openError = io.open(self.outputPath, "w")
     if file == nil then
         self:logError("writeFile", openError or "Datei konnte nicht geöffnet werden")
         return
@@ -383,13 +417,24 @@ function HofDashboardLive:jsonEncode(value)
         return '"' .. value .. '"'
     elseif valueType == "table" then
         local meta = getmetatable(value)
+        if meta ~= nil and meta.__jsonRaw == true then
+            return value.content
+        end
+
         local forceArray = meta ~= nil and meta.__jsonArray == true
         local length = #value
+        local parts = {}
+
+        if forceArray then
+            for i = 1, length do
+                parts[i] = self:jsonEncode(value[i])
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+
         local keyCount = 0
         for _ in pairs(value) do keyCount = keyCount + 1 end
-
-        local parts = {}
-        if forceArray or (length > 0 and keyCount == length) then
+        if length > 0 and keyCount == length then
             for i = 1, length do
                 parts[i] = self:jsonEncode(value[i])
             end
